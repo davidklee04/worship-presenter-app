@@ -1,0 +1,1566 @@
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import {
+  Search,
+  Plus,
+  Music4,
+  Copy,
+  Pencil,
+  Trash2,
+  X,
+  Check,
+  ChevronLeft,
+  Loader2,
+  Upload,
+  Download,
+  Users,
+} from "lucide-react";
+
+// ---------- Chord-sheet parsing ----------
+
+// Standard letter chords — covers extended/altered chords too:
+// C, G#m7, D/F#, Bm7b5, Fmaj7#11, Gsus4(no3), Cadd9/E, ...
+const QUALITY = "(?:maj|min|dim|aug|sus|add|m|\\([^()]*\\)|[#b+-])";
+const CHORD_TOKEN = new RegExp(`^[A-G](?:#|b)?(?:${QUALITY}|\\d{1,2})*(?:/(?:#|b)?[A-G](?:#|b)?\\d*)?$`, "i");
+// Nashville number system — same extended/altered coverage: 1, 5/4, 2m7, 1maj7/5, 3sus/7, 5m/b7, ...
+const NASHVILLE_TOKEN = new RegExp(`^[1-7](?:${QUALITY}|\\d{1,2})*(?:/(?:#|b)?[1-7](?:#|b)?\\d*)?$`, "i");
+
+const SECTION_WORDS = /^(verse|chorus|pre-chorus|prechorus|bridge|intro|outro|tag|interlude|ending|refrain|instrumental)\s*\d*\s*:?\s*$/i;
+
+// Non-lyric notation that shows up as its own line — repeat/performance directions,
+// not something to ever show on a slide.
+const DIRECTIVE_LINE_RE = /^\(?\s*(repeat(\s+(chorus|verse|bridge|x?\d+))?|instrumental(\s+x?\d+)?|interlude|tacet|vamp|fine|coda|to\s*coda|d\.?\s*s\.?\s*(al\s*coda)?|capo\s*\d*|play(\s+\w+)*|x\s*\d+)\s*\)?$/i;
+// Same directions, but tacked onto the end of a chord line rather than on their own,
+// e.g. "(1/3) 2m7 (1) (Last x)" or "4 1/3 2m (To Ch.)" — strip before classifying.
+const DIRECTIVE_INLINE_RE = /\(\s*(to\s*(ch\.?|chorus|v\d*|verse\s*\d*|coda)|last\s*x?\d*|repeat(\s+x?\d+)?|x\d+)\s*\)/gi;
+
+function isChordyToken(t) {
+  if (/^\|+$/.test(t)) return true; // barline
+  if (/^x\s*\d+$/i.test(t)) return true; // repeat marker: x2, x4
+  if (/^n\.?\s*c\.?$/i.test(t)) return true; // "No Chord"
+  if (t === "%" || t === "/" || t === "-" || t === "--") return true; // rhythm/slash notation
+  if (/^\(.+\)$/.test(t)) return isChordyToken(t.slice(1, -1)); // (1/3), (4), (2m7) chord alternates
+  return CHORD_TOKEN.test(t) || NASHVILLE_TOKEN.test(t);
+}
+
+function isChordLine(trimmed) {
+  if (!trimmed) return false;
+  // Collapse spaces *inside* parens first, so a chord-alternative group like
+  // "(4 2m7)" is judged as one token instead of two broken fragments.
+  const forCheck = trimmed.replace(/\(([^()]*)\)/g, (m, inner) => "(" + inner.replace(/\s+/g, "") + ")");
+  const tokens = forCheck.split(/\s+/);
+  const chordy = tokens.filter(isChordyToken).length;
+  return chordy / tokens.length >= 0.8;
+}
+
+function stripInlineChords(line) {
+  // [G] [Am7] [Verse note] — bracketed content is always chord/annotation, strip unconditionally
+  let out = line.replace(/\[[^\]]*\]/g, "");
+  // (G) (Am7) — only strip parens whose contents actually look like a chord, so real
+  // parenthetical lyrics like "(oh, oh, oh)" survive
+  out = out.replace(/\(([^)]+)\)/g, (m, inner) => (isChordyToken(inner.trim()) ? "" : m));
+  return out.replace(/[ \t]{2,}/g, " ");
+}
+
+function titleCase(s) {
+  return s
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+function parseChordSheet(text) {
+  const lines = (text || "").replace(/\r/g, "").split("\n");
+  const sections = [];
+  let current = { label: "Verse", lines: [] };
+
+  for (let raw of lines) {
+    raw = raw.replace(DIRECTIVE_INLINE_RE, "");
+    const trimmed = raw.trim();
+    const bracketMatch = trimmed.match(/^\[([^\]]+)\]$/);
+    let headerText = null;
+
+    if (bracketMatch && SECTION_WORDS.test(bracketMatch[1])) {
+      headerText = bracketMatch[1];
+    } else if (SECTION_WORDS.test(trimmed)) {
+      headerText = trimmed.replace(/:$/, "");
+    }
+
+    if (headerText) {
+      if (current.lines.length) sections.push(current);
+      current = { label: titleCase(headerText), lines: [] };
+      continue;
+    }
+
+    if (trimmed === "") {
+      if (current.lines.length && current.lines[current.lines.length - 1] !== null) {
+        current.lines.push(null);
+      }
+      continue;
+    }
+
+    if (DIRECTIVE_LINE_RE.test(trimmed)) continue;
+    if (isChordLine(trimmed)) continue;
+
+    const lyric = stripInlineChords(raw).trim();
+    if (lyric) current.lines.push(lyric);
+  }
+  if (current.lines.length) sections.push(current);
+
+  sections.forEach((s) => {
+    s.lines = s.lines.filter(
+      (l, i, arr) => !(l === null && (i === 0 || i === arr.length - 1 || arr[i - 1] === null))
+    );
+  });
+
+  return sections.filter((s) => s.lines.length);
+}
+
+function chunkSection(lines, perSlide) {
+  const slides = [];
+  let buffer = [];
+  for (const l of lines) {
+    if (l === null) {
+      if (buffer.length) {
+        slides.push(buffer);
+        buffer = [];
+      }
+      continue;
+    }
+    buffer.push(l);
+    if (buffer.length >= perSlide) {
+      slides.push(buffer);
+      buffer = [];
+    }
+  }
+  if (buffer.length) slides.push(buffer);
+  return slides;
+}
+
+function buildSlides(song) {
+  const sections = parseChordSheet(song.rawText);
+  const perSlide = song.linesPerSlide || 2;
+  const slides = [];
+  sections.forEach((s) => {
+    chunkSection(s.lines, perSlide).forEach((lines) => {
+      slides.push({ section: s.label, lines });
+    });
+  });
+  return slides;
+}
+
+function exportText(song) {
+  return buildSlides(song)
+    .map((s) => s.lines.join("\n"))
+    .join("\n\n");
+}
+
+// ---------- PDF import (client-side, via pdf.js) ----------
+
+const PDFJS_SCRIPT = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+const PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+function loadPdfJs() {
+  if (window.__pdfjsLoadPromise) return window.__pdfjsLoadPromise;
+  window.__pdfjsLoadPromise = new Promise((resolve, reject) => {
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+      resolve(window.pdfjsLib);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = PDFJS_SCRIPT;
+    script.onload = () => {
+      try {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+        resolve(window.pdfjsLib);
+      } catch (e) {
+        reject(e);
+      }
+    };
+    script.onerror = () => reject(new Error("Couldn't load the PDF reader library."));
+    document.head.appendChild(script);
+  });
+  return window.__pdfjsLoadPromise;
+}
+
+function joinRowItems(its) {
+  let text = "";
+  let prevEnd = null;
+  for (const it of its) {
+    if (prevEnd !== null && it.x - prevEnd > 1.5) text += " ";
+    text += it.str;
+    prevEnd = it.x + it.width;
+  }
+  return cleanExtractedText(text.trim());
+}
+
+// Some embedded PDF fonts map ligature glyphs (fi, fl) to control characters
+// or drop them entirely instead of proper Unicode — clean up what we can.
+function cleanExtractedText(s) {
+  return s
+    .replace(/\uFB00/g, "ff")
+    .replace(/\uFB01/g, "fi")
+    .replace(/\uFB02/g, "fl")
+    .replace(/\uFB03/g, "ffi")
+    .replace(/\uFB04/g, "ffl")
+    .replace(/[\u0000-\u001F\u007F]/g, "");
+}
+
+// Finds the true gutter between two columns by locating the largest empty
+// gap in item x-start positions near the middle of the page — far more
+// reliable than assuming a fixed midpoint, since real column starts vary
+// (a right column can start well left or right of the page's exact center).
+function detectColumnBoundary(items, pageWidth) {
+  const loBound = pageWidth * 0.25;
+  const hiBound = pageWidth * 0.75;
+  const xs = [...new Set(items.map((it) => Math.round(it.x)))].sort((a, b) => a - b);
+  let bestGap = 0;
+  let boundary = null;
+  for (let i = 1; i < xs.length; i++) {
+    const mid = (xs[i - 1] + xs[i]) / 2;
+    if (mid < loBound || mid > hiBound) continue;
+    const gap = xs[i] - xs[i - 1];
+    if (gap > bestGap) {
+      bestGap = gap;
+      boundary = mid;
+    }
+  }
+  // Require a real gutter (not just sparse sampling) before trusting a two-column split
+  return bestGap >= pageWidth * 0.03 ? boundary : null;
+}
+
+// Groups text items into visual rows, then — if the page is genuinely two
+// columns — routes each row's content to the left or right stream based on
+// which side of the real gutter it falls on. Streams are concatenated
+// left-then-right at the end, so reading order comes out correct even when
+// the two columns have a different number of lines (most of the time).
+function reconstructColumns(items, pageWidth) {
+  // Wide enough to fold superscript chord extensions (maj7, sus4, etc. set
+  // a few points above the baseline) back onto their base chord's row,
+  // while staying well under the ~10-14pt gap between genuinely different
+  // rows (a chord line and the lyric line under it).
+  const Y_TOL = 4.5;
+  const boundary = detectColumnBoundary(items, pageWidth);
+
+  const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
+  const rows = [];
+  for (const it of sorted) {
+    let row = rows.find((r) => Math.abs(r.y - it.y) <= Y_TOL);
+    if (!row) {
+      row = { y: it.y, items: [] };
+      rows.push(row);
+    }
+    row.items.push(it);
+  }
+  rows.sort((a, b) => b.y - a.y);
+
+  if (boundary === null) {
+    // No confident two-column split — treat the whole page as one column,
+    // simple top-to-bottom order.
+    const single = rows
+      .map((row) => joinRowItems([...row.items].sort((a, c) => a.x - c.x)))
+      .filter(Boolean);
+    return { left: single, right: [] };
+  }
+
+  const left = [];
+  const right = [];
+
+  for (const row of rows) {
+    const its = [...row.items].sort((a, c) => a.x - c.x);
+    const leftPart = its.filter((it) => it.x < boundary);
+    const rightPart = its.filter((it) => it.x >= boundary);
+    if (leftPart.length) left.push(joinRowItems(leftPart));
+    if (rightPart.length) right.push(joinRowItems(rightPart));
+  }
+
+  return { left: left.filter(Boolean), right: right.filter(Boolean) };
+}
+
+const PDF_FOOTER_RE = /©|publishing|ccli|integrity'?s hosanna|leadworship|lensongs|songselect|copyright|all rights reserved|for use solely/i;
+const PDF_META_RE = /^(key|tempo|time)\s*-/i;
+// Subtitle line some charts add under the writer credits, e.g.
+// "(based on the recording by Elevation Worship, feat. Bella Cordero)"
+const PDF_SUBTITLE_RE = /^\(\s*(based on|as recorded by|as performed by)\b/i;
+
+async function extractChordSheetFromPdf(pdfjsLib, arrayBuffer) {
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let allLines = [];
+  let hadText = false;
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const viewport = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent();
+    const items = content.items
+      .map((it) => ({
+        str: it.str,
+        x: it.transform[4],
+        y: it.transform[5],
+        width: it.width || 0,
+      }))
+      .filter((it) => it.str.trim() !== "");
+
+    if (items.length === 0) continue;
+    hadText = true;
+
+    const { left, right } = reconstructColumns(items, viewport.width);
+    allLines.push(...left, ...right);
+  }
+
+  if (!hadText) return { hadText: false };
+
+  const cleaned = allLines
+    .map((l) => l.trim())
+    .filter(
+      (l) =>
+        l &&
+        !PDF_FOOTER_RE.test(l) &&
+        !PDF_META_RE.test(l) &&
+        !PDF_SUBTITLE_RE.test(l) &&
+        !/^CCLI Song #/i.test(l)
+    );
+
+  let title = "";
+  let artist = "";
+  let bodyStart = 0;
+
+  if (cleaned.length) {
+    title = cleaned[0];
+    bodyStart = 1;
+    const next = cleaned[1];
+    if (next && !SECTION_WORDS.test(next)) {
+      const sectionComingNext = cleaned[2] && SECTION_WORDS.test(cleaned[2]);
+      const looksLikeAttribution = next.includes("|");
+      if (sectionComingNext || looksLikeAttribution) {
+        artist = next;
+        bodyStart = 2;
+      }
+    }
+  }
+
+  const rawText = cleaned.slice(bodyStart).join("\n");
+  return { hadText: true, title, artist, rawText };
+}
+
+function loadPptxGenJs() {
+  if (window.__pptxgenjsLoadPromise) return window.__pptxgenjsLoadPromise;
+  window.__pptxgenjsLoadPromise = new Promise((resolve, reject) => {
+    if (window.PptxGenJS) {
+      resolve(window.PptxGenJS);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pptxgenjs/3.12.0/pptxgen.bundle.js";
+    script.onload = () => resolve(window.PptxGenJS);
+    script.onerror = () => reject(new Error("Couldn't load the slide export library."));
+    document.head.appendChild(script);
+  });
+  return window.__pptxgenjsLoadPromise;
+}
+
+const PPTX_BG = "0D0B09";
+const PPTX_TEXT = "FAF6EE";
+const PPTX_MUTED = "8C8478";
+
+async function downloadSongAsPptx(song) {
+  const PptxGenJS = await loadPptxGenJs();
+  const pres = new PptxGenJS();
+  pres.layout = "LAYOUT_WIDE";
+
+  const fontOpt = FONT_OPTIONS.find((f) => f.value === song.fontFamily) || FONT_OPTIONS[0];
+  const FONT = fontOpt.pptxName;
+  const slides = buildSlides(song);
+
+  const title = pres.addSlide();
+  title.background = { color: PPTX_BG };
+  title.addText(song.title, {
+    x: 0.8, y: 2.9, w: 11.7, h: 1.4,
+    fontFace: FONT, fontSize: 44, bold: true, color: PPTX_TEXT, align: "center", margin: 0,
+  });
+  if (song.artist) {
+    title.addText(song.artist, {
+      x: 0.8, y: 4.25, w: 11.7, h: 0.6,
+      fontFace: FONT, fontSize: 18, color: PPTX_MUTED, align: "center", margin: 0,
+    });
+  }
+
+  slides.forEach((s, i) => {
+    const slide = pres.addSlide();
+    slide.background = { color: PPTX_BG };
+
+    if (song.showLabels === true) {
+      slide.addText(`${s.section.toUpperCase()}  ·  ${i + 1}/${slides.length}`, {
+        x: 0.6, y: 0.4, w: 8, h: 0.4,
+        fontFace: "Courier New", fontSize: 11, color: PPTX_MUTED, charSpacing: 2, margin: 0,
+      });
+    }
+
+    const lineText = s.lines.map((l, idx) => ({
+      text: l,
+      options: idx < s.lines.length - 1 ? { breakLine: true } : {},
+    }));
+
+    slide.addText(lineText, {
+      x: 0.8, y: 0, w: 11.7, h: 7.5,
+      fontFace: FONT,
+      fontSize: song.fontSize || DEFAULT_FONT_SIZE,
+      bold: true,
+      color: PPTX_TEXT,
+      align: "center",
+      valign: "middle",
+      lineSpacingMultiple: 1.3,
+      margin: 0,
+    });
+  });
+
+  const safeName = (song.title || "song").replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") || "song";
+  await pres.writeFile({ fileName: `${safeName}.pptx` });
+}
+
+// ---------- Storage helpers ----------
+// SHARED library: every song is stored with shared=true, so anyone using this
+// artifact sees and can edit the same library, not a private copy per person.
+
+async function listSongs() {
+  const idx = await window.storage.list("songs:", true);
+  if (!idx || !idx.keys || idx.keys.length === 0) return [];
+  const out = [];
+  for (const key of idx.keys) {
+    try {
+      const res = await window.storage.get(key, true);
+      if (res && res.value) out.push(JSON.parse(res.value));
+    } catch (e) {
+      // skip unreadable entry
+    }
+  }
+  out.sort((a, b) => a.title.localeCompare(b.title));
+  return out;
+}
+
+async function saveSongToStorage(song) {
+  await window.storage.set(`songs:${song.id}`, JSON.stringify(song), true);
+}
+
+async function deleteSongFromStorage(id) {
+  await window.storage.delete(`songs:${id}`, true);
+}
+
+// ---------- UI ----------
+
+const FONTS = `
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&family=Montserrat:wght@600;700&family=Playfair+Display:wght@600;700&family=Bitter:wght@600;700&family=Work+Sans:wght@600;700&family=Barlow+Condensed:wght@600;700&display=swap');
+`;
+
+const FONT_OPTIONS = [
+  { label: "Georgia (safe for PPT)", value: "Georgia, serif", pptxName: "Georgia", safe: true },
+  { label: "Fraunces (serif)", value: "'Fraunces', serif", pptxName: "Fraunces", safe: false },
+  { label: "Playfair Display (serif)", value: "'Playfair Display', serif", pptxName: "Playfair Display", safe: false },
+  { label: "Bitter (slab serif)", value: "'Bitter', serif", pptxName: "Bitter", safe: false },
+  { label: "Montserrat (sans)", value: "'Montserrat', sans-serif", pptxName: "Montserrat", safe: false },
+  { label: "Work Sans (sans)", value: "'Work Sans', sans-serif", pptxName: "Work Sans", safe: false },
+  { label: "Barlow Condensed (condensed)", value: "'Barlow Condensed', sans-serif", pptxName: "Barlow Condensed", safe: false },
+  { label: "Verdana (safe for PPT)", value: "Verdana, sans-serif", pptxName: "Verdana", safe: true },
+];
+
+const DEFAULT_FONT_FAMILY = FONT_OPTIONS[0].value; // Georgia
+const DEFAULT_FONT_SIZE = 28; // pt
+// Preview cards are scaled-down stand-ins for the real slide, so preview px
+// tracks the chosen point size proportionally.
+const MAIN_PREVIEW_RATIO = 16 / 36;
+const MINI_PREVIEW_RATIO = 10.5 / 36;
+
+const TOKENS = {
+  paper: "#F5F1E8",
+  paperDeep: "#EDE6D6",
+  ink: "#2C2620",
+  inkSoft: "#6B6154",
+  rule: "#DDD2BC",
+  accent: "#6E4A2E",
+  accentSoft: "#8C6A4A",
+  screen: "#151210",
+  screenText: "#FAF6EE",
+  danger: "#9A3B2E",
+  info: "#4B6355",
+  infoBg: "#E4EAE1",
+};
+
+function EmptyLibrary({ onAdd, onImport }) {
+  return (
+    <div style={{ padding: "48px 24px", textAlign: "center" }}>
+      <Music4 size={28} color={TOKENS.inkSoft} strokeWidth={1.5} />
+      <p style={{ fontFamily: "Inter", fontSize: 13, color: TOKENS.inkSoft, marginTop: 12, lineHeight: 1.6 }}>
+        No songs yet. Paste a chord sheet or import a PDF to start your library.
+      </p>
+      <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 12, flexWrap: "wrap" }}>
+        <button onClick={onAdd} style={styles.primaryBtnSmall}>
+          <Plus size={14} /> Paste lyrics
+        </button>
+        <button onClick={onImport} style={styles.ghostBtnSmall}>
+          <Upload size={13} /> Import PDF
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SongForm({ initial, onCancel, onSave, saving }) {
+  const [title, setTitle] = useState(initial?.title || "");
+  const [artist, setArtist] = useState(initial?.artist || "");
+  const [rawText, setRawText] = useState(initial?.rawText || "");
+  const [linesPerSlide, setLinesPerSlide] = useState(initial?.linesPerSlide || 2);
+  const [fontFamily, setFontFamily] = useState(initial?.fontFamily || DEFAULT_FONT_FAMILY);
+  const [fontSize, setFontSize] = useState(initial?.fontSize || DEFAULT_FONT_SIZE);
+  const [showLabels, setShowLabels] = useState(initial?.showLabels === true);
+  const canSave = title.trim().length > 0 && rawText.trim().length > 0;
+
+  const preview = useMemo(() => {
+    if (!rawText.trim()) return [];
+    return buildSlides({ rawText, linesPerSlide });
+  }, [rawText, linesPerSlide]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 720 }}>
+      {initial?.__importNote && (
+        <div style={styles.infoBanner}>{initial.__importNote}</div>
+      )}
+
+      <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ flex: 2 }}>
+          <label style={styles.label}>Title</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Amazing Grace"
+            style={styles.input}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={styles.label}>Artist / origin</label>
+          <input
+            value={artist}
+            onChange={(e) => setArtist(e.target.value)}
+            placeholder="Traditional"
+            style={styles.input}
+          />
+        </div>
+      </div>
+
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <label style={styles.label}>Chord sheet</label>
+          <span style={{ fontFamily: "Inter", fontSize: 11, color: TOKENS.inkSoft }}>
+            Chords are stripped automatically — paste it as-is
+          </span>
+        </div>
+        <textarea
+          value={rawText}
+          onChange={(e) => setRawText(e.target.value)}
+          placeholder={"[Verse 1]\nG              D\nAmazing grace, how sweet the sound\n..."}
+          style={styles.textarea}
+          rows={12}
+        />
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <label style={styles.label}>Lines per slide</label>
+        <NumberStepper value={linesPerSlide} onChange={setLinesPerSlide} min={1} max={8} />
+        <span style={{ fontFamily: "Inter", fontSize: 12, color: TOKENS.inkSoft }}>
+          {preview.length} slide{preview.length === 1 ? "" : "s"} at this setting
+        </span>
+      </div>
+      <p style={{ fontFamily: "Inter", fontSize: 11.5, color: TOKENS.inkSoft, marginTop: -12, lineHeight: 1.5 }}>
+        Tip: leave a blank line between phrases above to force a slide break there, no matter
+        what number you set here — handy for one section that needs shorter slides than the rest.
+      </p>
+
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 20, flexWrap: "wrap" }}>
+        <div>
+          <label style={styles.label}>Font</label>
+          <select
+            value={fontFamily}
+            onChange={(e) => setFontFamily(e.target.value)}
+            style={styles.select}
+          >
+            {FONT_OPTIONS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={styles.label}>Font size</label>
+          <NumberStepper value={fontSize} onChange={setFontSize} min={20} max={60} step={2} />
+        </div>
+        <div>
+          <label style={styles.label}>Section labels</label>
+          <ToggleSwitch value={showLabels} onChange={setShowLabels} onLabel="Shown" offLabel="Hidden" />
+        </div>
+      </div>
+
+      {preview.length > 0 && (
+        <div>
+          <label style={styles.label}>Live preview</label>
+          <div style={styles.previewStrip}>
+            {preview.slice(0, 6).map((s, i) => (
+              <MiniScreen key={i} slide={s} fontFamily={fontFamily} fontSize={fontSize} showLabels={showLabels} />
+            ))}
+            {preview.length > 6 && (
+              <div style={{ ...styles.screen, ...styles.screenSmall, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ fontFamily: "Inter", fontSize: 12, color: TOKENS.screenText, opacity: 0.6 }}>
+                  +{preview.length - 6} more
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+        <button
+          disabled={!canSave || saving}
+          onClick={() =>
+            onSave({
+              title: title.trim(),
+              artist: artist.trim(),
+              rawText,
+              linesPerSlide,
+              fontFamily,
+              fontSize,
+              showLabels,
+            })
+          }
+          style={{ ...styles.primaryBtn, opacity: canSave && !saving ? 1 : 0.5 }}
+        >
+          {saving ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
+          {saving ? "Saving…" : "Save song"}
+        </button>
+        <button onClick={onCancel} style={styles.ghostBtn}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NumberStepper({ value, onChange, min = 1, max = 8, step = 1 }) {
+  const clamp = (n) => Math.max(min, Math.min(max, n));
+  return (
+    <div style={styles.stepper}>
+      <button
+        onClick={() => onChange(clamp(value - step))}
+        disabled={value <= min}
+        style={{ ...styles.stepperBtn, opacity: value <= min ? 0.4 : 1 }}
+      >
+        −
+      </button>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => {
+          const n = parseInt(e.target.value, 10);
+          if (!Number.isNaN(n)) onChange(clamp(n));
+        }}
+        style={styles.stepperInput}
+      />
+      <button
+        onClick={() => onChange(clamp(value + step))}
+        disabled={value >= max}
+        style={{ ...styles.stepperBtn, opacity: value >= max ? 0.4 : 1 }}
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
+function ToggleSwitch({ value, onChange, onLabel = "On", offLabel = "Off" }) {
+  return (
+    <div style={styles.toggleGroup}>
+      <button
+        onClick={() => onChange(false)}
+        style={{ ...styles.toggleBtn, ...(!value ? styles.toggleBtnActive : {}) }}
+      >
+        {offLabel}
+      </button>
+      <button
+        onClick={() => onChange(true)}
+        style={{ ...styles.toggleBtn, ...(value ? styles.toggleBtnActive : {}) }}
+      >
+        {onLabel}
+      </button>
+    </div>
+  );
+}
+
+function MiniScreen({ slide, fontFamily, fontSize, showLabels }) {
+  return (
+    <div style={{ ...styles.screen, ...styles.screenSmall }}>
+      {showLabels && <span style={styles.eyebrow}>{slide.section}</span>}
+      <div
+        style={{
+          ...styles.screenLinesSmall,
+          fontFamily: fontFamily || DEFAULT_FONT_FAMILY,
+          fontSize: (fontSize || DEFAULT_FONT_SIZE) * MINI_PREVIEW_RATIO,
+        }}
+      >
+        {slide.lines.map((l, i) => (
+          <div key={i}>{l}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelete }) {
+  const slides = useMemo(() => buildSlides(song), [song]);
+  const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState(null);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(exportText(song));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch (e) {
+      // clipboard blocked — no-op, button just won't confirm
+    }
+  };
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      await downloadSongAsPptx(song);
+    } catch (e) {
+      setDownloadError("Couldn't build the PowerPoint file. Try again.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 4 }}>
+        <div>
+          <h2 style={styles.songTitle}>{song.title}</h2>
+          {song.artist && <div style={styles.songArtist}>{song.artist}</div>}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onEdit} style={styles.iconBtn} title="Edit">
+            <Pencil size={15} />
+          </button>
+          <button
+            onClick={onDelete}
+            style={{ ...styles.iconBtn, ...(confirmingDelete ? styles.iconBtnDanger : {}) }}
+            title="Delete"
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
+      </div>
+      {confirmingDelete && (
+        <div style={{ fontFamily: "Inter", fontSize: 12, color: TOKENS.danger, marginBottom: 12 }}>
+          Click delete again to permanently remove this song.
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 20, margin: "16px 0 12px", flexWrap: "wrap" }}>
+        <div>
+          <label style={styles.label}>Lines per slide</label>
+          <NumberStepper
+            value={song.linesPerSlide || 2}
+            onChange={(n) => onUpdateSettings({ linesPerSlide: n })}
+            min={1}
+            max={8}
+          />
+        </div>
+        <div>
+          <label style={styles.label}>Font</label>
+          <select
+            value={song.fontFamily || DEFAULT_FONT_FAMILY}
+            onChange={(e) => onUpdateSettings({ fontFamily: e.target.value })}
+            style={styles.select}
+          >
+            {FONT_OPTIONS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={styles.label}>Font size</label>
+          <NumberStepper
+            value={song.fontSize || DEFAULT_FONT_SIZE}
+            onChange={(n) => onUpdateSettings({ fontSize: n })}
+            min={20}
+            max={60}
+            step={2}
+          />
+        </div>
+        <div>
+          <label style={styles.label}>Section labels</label>
+          <ToggleSwitch
+            value={song.showLabels === true}
+            onChange={(v) => onUpdateSettings({ showLabels: v })}
+            onLabel="Shown"
+            offLabel="Hidden"
+          />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+        <span style={{ fontFamily: "Inter", fontSize: 12, color: TOKENS.inkSoft }}>
+          {slides.length} slide{slides.length === 1 ? "" : "s"}
+        </span>
+        <div style={{ flex: 1 }} />
+        <button onClick={handleCopy} style={styles.ghostBtnSmall}>
+          <Copy size={13} /> {copied ? "Copied!" : "Copy as text"}
+        </button>
+        <button onClick={handleDownload} disabled={downloading} style={{ ...styles.primaryBtnSmall, opacity: downloading ? 0.6 : 1 }}>
+          {downloading ? <Loader2 size={13} className="spin" /> : <Download size={13} />}
+          {downloading ? "Building…" : "Download .pptx"}
+        </button>
+      </div>
+      {downloadError && (
+        <div style={{ ...styles.errorBanner, marginTop: 0, marginBottom: 16 }}>{downloadError}</div>
+      )}
+      <div style={{ marginBottom: 12 }} />
+
+      <div style={styles.screenGrid}>
+        {slides.map((s, i) => (
+          <div key={i} style={styles.screen}>
+            {song.showLabels === true && (
+              <span style={styles.eyebrow}>
+                {s.section} · {i + 1}/{slides.length}
+              </span>
+            )}
+            <div
+              style={{
+                ...styles.screenLines,
+                fontFamily: song.fontFamily || DEFAULT_FONT_FAMILY,
+                fontSize: (song.fontSize || DEFAULT_FONT_SIZE) * MAIN_PREVIEW_RATIO,
+              }}
+            >
+              {s.lines.map((l, j) => (
+                <div key={j}>{l}</div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p style={{ fontFamily: "Inter", fontSize: 11.5, color: TOKENS.inkSoft, marginTop: 20, lineHeight: 1.6 }}>
+        "Download .pptx" builds a PowerPoint file right in your browser, matching this song's font,
+        size, and label settings — no need to leave the app. "Copy as text" gives one slide per
+        block for pasting into ProPresenter, EasyWorship, or similar.
+      </p>
+    </div>
+  );
+}
+
+export default function WorshipSlideLibrary() {
+  const [songs, setSongs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+  const [mode, setMode] = useState("preview"); // 'preview' | 'add' | 'edit'
+  const [saving, setSaving] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  const [pendingImport, setPendingImport] = useState(null);
+  const [formKey, setFormKey] = useState(0);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const list = await listSongs();
+      setSongs(list);
+    } catch (e) {
+      setError("Couldn't load your library. Try refreshing.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return songs;
+    return songs.filter(
+      (s) => s.title.toLowerCase().includes(q) || (s.artist || "").toLowerCase().includes(q)
+    );
+  }, [songs, query]);
+
+  const selected = songs.find((s) => s.id === selectedId) || null;
+
+  const startBlankAdd = () => {
+    setPendingImport(null);
+    setImportError(null);
+    setFormKey((k) => k + 1);
+    setMode("add");
+    setSelectedId(null);
+  };
+
+  const startImportPdf = () => {
+    setImportError(null);
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setImporting(true);
+    setImportError(null);
+    try {
+      const pdfjsLib = await loadPdfJs();
+      const buf = await file.arrayBuffer();
+      const result = await extractChordSheetFromPdf(pdfjsLib, buf);
+
+      if (!result.hadText) {
+        setImportError(
+          "That PDF doesn't seem to contain selectable text — it may be a scanned image. Try uploading it in chat instead so it can be read visually, or paste the lyrics in manually."
+        );
+        return;
+      }
+      if (!result.rawText || !result.rawText.trim()) {
+        setImportError(
+          "The PDF loaded, but no lyric lines came through clearly. Try pasting the lyrics in manually below, or share it in chat."
+        );
+      }
+
+      setPendingImport({
+        title: result.title || file.name.replace(/\.pdf$/i, ""),
+        artist: result.artist || "",
+        rawText: result.rawText || "",
+        linesPerSlide: 2,
+        __importNote:
+          "Imported from PDF — chord-stripping and column order are best-effort. Please review the lyrics below before saving.",
+      });
+      setFormKey((k) => k + 1);
+      setMode("add");
+      setSelectedId(null);
+    } catch (e) {
+      setImportError("Couldn't read that PDF. " + (e?.message || "Try again, or paste the lyrics manually."));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleSaveNew = async (data) => {
+    setSaving(true);
+    try {
+      const song = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...data };
+      await saveSongToStorage(song);
+      await refresh();
+      setSelectedId(song.id);
+      setPendingImport(null);
+      setMode("preview");
+    } catch (e) {
+      setError("Couldn't save that song. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveEdit = async (data) => {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      const song = { ...selected, ...data };
+      await saveSongToStorage(song);
+      await refresh();
+      setMode("preview");
+    } catch (e) {
+      setError("Couldn't save your changes. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (confirmDeleteId !== id) {
+      setConfirmDeleteId(id);
+      return;
+    }
+    try {
+      await deleteSongFromStorage(id);
+      setConfirmDeleteId(null);
+      setSelectedId(null);
+      setMode("preview");
+      await refresh();
+    } catch (e) {
+      setError("Couldn't delete that song. Try again.");
+    }
+  };
+
+  const handleUpdateSongSettings = async (patch) => {
+    if (!selected) return;
+    const song = { ...selected, ...patch };
+    setSongs((prev) => prev.map((s) => (s.id === song.id ? song : s)));
+    try {
+      await saveSongToStorage(song);
+    } catch (e) {
+      // best-effort, next refresh will reconcile
+    }
+  };
+
+  return (
+    <div style={styles.app}>
+      <style>{FONTS}{`
+        * { box-sizing: border-box; }
+        input::placeholder, textarea::placeholder { color: ${TOKENS.inkSoft}; opacity: 0.55; }
+        input:focus, textarea:focus { outline: none; border-color: ${TOKENS.accentSoft}; }
+        button { cursor: pointer; font-family: 'Inter', sans-serif; }
+        button:disabled { cursor: not-allowed; }
+        .spin { animation: spin 0.8s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @media (max-width: 720px) {
+          .wsl-shell { grid-template-columns: 1fr !important; }
+          .wsl-sidebar { border-right: none !important; border-bottom: 1px solid ${TOKENS.rule}; max-height: 260px; }
+        }
+      `}</style>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/pdf"
+        style={{ display: "none" }}
+        onChange={handleFileChange}
+      />
+
+      <div className="wsl-shell" style={styles.shell}>
+        <div className="wsl-sidebar" style={styles.sidebar}>
+          <div style={styles.sidebarHeader}>
+            <div style={styles.brand}>
+              <Music4 size={16} color={TOKENS.accent} strokeWidth={2} />
+              <span>Song Library</span>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={startImportPdf}
+                style={styles.addBtnGhost}
+                title="Import from PDF"
+                disabled={importing}
+              >
+                {importing ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
+              </button>
+              <button onClick={startBlankAdd} style={styles.addBtn} title="Add song">
+                <Plus size={16} />
+              </button>
+            </div>
+          </div>
+
+          <div style={styles.sharedBadge}>
+            <Users size={11} />
+            <span>Shared library — visible to everyone with this link</span>
+          </div>
+
+          <div style={styles.searchWrap}>
+            <Search size={14} color={TOKENS.inkSoft} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search title or artist"
+              style={styles.searchInput}
+            />
+          </div>
+
+          <div style={styles.songList}>
+            {loading && (
+              <div style={{ padding: 20, display: "flex", justifyContent: "center" }}>
+                <Loader2 size={18} className="spin" color={TOKENS.inkSoft} />
+              </div>
+            )}
+            {!loading && filtered.length === 0 && songs.length === 0 && (
+              <EmptyLibrary onAdd={startBlankAdd} onImport={startImportPdf} />
+            )}
+            {!loading && filtered.length === 0 && songs.length > 0 && (
+              <div style={{ padding: 20, fontFamily: "Inter", fontSize: 12.5, color: TOKENS.inkSoft }}>
+                No matches for "{query}"
+              </div>
+            )}
+            {!loading &&
+              filtered.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => {
+                    setSelectedId(s.id);
+                    setMode("preview");
+                    setConfirmDeleteId(null);
+                  }}
+                  style={{
+                    ...styles.songItem,
+                    ...(s.id === selectedId ? styles.songItemActive : {}),
+                  }}
+                >
+                  <div style={styles.songItemTitle}>{s.title}</div>
+                  {s.artist && <div style={styles.songItemArtist}>{s.artist}</div>}
+                </button>
+              ))}
+          </div>
+        </div>
+
+        <div style={styles.main}>
+          {error && <div style={styles.errorBanner}>{error}</div>}
+          {importError && (
+            <div style={styles.errorBanner}>
+              {importError}
+              <button
+                onClick={() => setImportError(null)}
+                style={{ float: "right", background: "none", border: "none", color: TOKENS.danger }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          )}
+          {importing && (
+            <div style={styles.infoBanner}>
+              <Loader2 size={13} className="spin" style={{ verticalAlign: "-2px", marginRight: 6 }} />
+              Reading PDF and reconstructing the lyric lines…
+            </div>
+          )}
+
+          {mode === "add" && (
+            <>
+              <BackRow onBack={() => setMode("preview")} label={pendingImport ? "Review import" : "New song"} />
+              <SongForm
+                key={`add-${formKey}`}
+                initial={pendingImport}
+                onCancel={() => {
+                  setPendingImport(null);
+                  setMode("preview");
+                }}
+                onSave={handleSaveNew}
+                saving={saving}
+              />
+            </>
+          )}
+
+          {mode === "edit" && selected && (
+            <>
+              <BackRow onBack={() => setMode("preview")} label={`Editing "${selected.title}"`} />
+              <SongForm
+                key={`edit-${selected.id}`}
+                initial={selected}
+                onCancel={() => setMode("preview")}
+                onSave={handleSaveEdit}
+                saving={saving}
+              />
+            </>
+          )}
+
+          {mode === "preview" && selected && (
+            <SongPreview
+              song={selected}
+              onEdit={() => setMode("edit")}
+              onDelete={() => handleDelete(selected.id)}
+              onUpdateSettings={handleUpdateSongSettings}
+              confirmingDelete={confirmDeleteId === selected.id}
+            />
+          )}
+
+          {mode === "preview" && !selected && !loading && songs.length > 0 && (
+            <div style={{ padding: "64px 24px", textAlign: "center" }}>
+              <p style={{ fontFamily: "Inter", fontSize: 13, color: TOKENS.inkSoft }}>
+                Select a song from the library, add a new one, or import a PDF.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BackRow({ onBack, label }) {
+  return (
+    <button onClick={onBack} style={styles.backRow}>
+      <ChevronLeft size={14} />
+      <span style={{ fontFamily: "Inter", fontSize: 12, color: TOKENS.inkSoft }}>{label}</span>
+    </button>
+  );
+}
+
+const styles = {
+  app: {
+    fontFamily: "'Inter', sans-serif",
+    color: TOKENS.ink,
+    background: TOKENS.paper,
+    minHeight: "600px",
+    borderRadius: 14,
+    border: `1px solid ${TOKENS.rule}`,
+    overflow: "hidden",
+  },
+  shell: {
+    display: "grid",
+    gridTemplateColumns: "260px 1fr",
+    minHeight: "600px",
+  },
+  sidebar: {
+    borderRight: `1px solid ${TOKENS.rule}`,
+    background: TOKENS.paperDeep,
+    display: "flex",
+    flexDirection: "column",
+  },
+  sidebarHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "16px 16px 12px",
+  },
+  brand: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    fontFamily: "'Fraunces', serif",
+    fontWeight: 600,
+    fontSize: 15,
+    letterSpacing: "-0.01em",
+  },
+  addBtn: {
+    background: TOKENS.accent,
+    color: "#fff",
+    border: "none",
+    borderRadius: 7,
+    width: 26,
+    height: 26,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addBtnGhost: {
+    background: "#fff",
+    color: TOKENS.accent,
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 7,
+    width: 26,
+    height: 26,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  searchWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    margin: "0 16px 12px",
+    padding: "7px 10px",
+    background: TOKENS.paper,
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 8,
+  },
+  sharedBadge: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    margin: "0 16px 12px",
+    padding: "6px 10px",
+    background: TOKENS.infoBg,
+    color: TOKENS.info,
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 7,
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 10.5,
+    lineHeight: 1.3,
+  },
+  searchInput: {
+    border: "none",
+    background: "transparent",
+    fontSize: 12.5,
+    fontFamily: "'Inter', sans-serif",
+    color: TOKENS.ink,
+    width: "100%",
+  },
+  songList: {
+    overflowY: "auto",
+    flex: 1,
+    paddingBottom: 12,
+  },
+  songItem: {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "9px 16px",
+    background: "transparent",
+    border: "none",
+    borderLeft: "3px solid transparent",
+  },
+  songItemActive: {
+    background: TOKENS.paper,
+    borderLeft: `3px solid ${TOKENS.accent}`,
+  },
+  songItemTitle: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: TOKENS.ink,
+  },
+  songItemArtist: {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 11,
+    color: TOKENS.inkSoft,
+    marginTop: 1,
+  },
+  main: {
+    padding: "28px 32px",
+    overflowY: "auto",
+  },
+  errorBanner: {
+    background: "#F5DFDA",
+    color: TOKENS.danger,
+    fontSize: 12.5,
+    padding: "8px 12px",
+    borderRadius: 8,
+    marginBottom: 16,
+    fontFamily: "'Inter', sans-serif",
+    lineHeight: 1.5,
+  },
+  infoBanner: {
+    background: TOKENS.infoBg,
+    color: TOKENS.info,
+    fontSize: 12.5,
+    padding: "8px 12px",
+    borderRadius: 8,
+    marginBottom: 16,
+    fontFamily: "'Inter', sans-serif",
+    lineHeight: 1.5,
+  },
+  backRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    background: "none",
+    border: "none",
+    padding: "0 0 16px",
+    color: TOKENS.inkSoft,
+  },
+  label: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    color: TOKENS.inkSoft,
+    display: "block",
+    marginBottom: 6,
+  },
+  input: {
+    width: "100%",
+    padding: "9px 11px",
+    fontSize: 14,
+    fontFamily: "'Inter', sans-serif",
+    background: "#fff",
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 8,
+    color: TOKENS.ink,
+  },
+  textarea: {
+    width: "100%",
+    padding: "12px",
+    fontSize: 13,
+    fontFamily: "'JetBrains Mono', monospace",
+    lineHeight: 1.6,
+    background: "#fff",
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 8,
+    color: TOKENS.ink,
+    resize: "vertical",
+  },
+  toggleGroup: {
+    display: "flex",
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 7,
+    overflow: "hidden",
+  },
+  toggleBtn: {
+    padding: "5px 12px",
+    fontSize: 12.5,
+    background: "#fff",
+    border: "none",
+    color: TOKENS.inkSoft,
+  },
+  toggleBtnActive: {
+    background: TOKENS.accent,
+    color: "#fff",
+  },
+  select: {
+    padding: "6px 10px",
+    fontSize: 12.5,
+    fontFamily: "'Inter', sans-serif",
+    background: "#fff",
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 7,
+    color: TOKENS.ink,
+    height: 28,
+  },
+  stepper: {
+    display: "flex",
+    alignItems: "center",
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 7,
+    overflow: "hidden",
+    background: "#fff",
+  },
+  stepperBtn: {
+    width: 26,
+    height: 28,
+    background: TOKENS.paperDeep,
+    border: "none",
+    color: TOKENS.ink,
+    fontSize: 15,
+    lineHeight: 1,
+  },
+  stepperInput: {
+    width: 34,
+    height: 28,
+    textAlign: "center",
+    border: "none",
+    borderLeft: `1px solid ${TOKENS.rule}`,
+    borderRight: `1px solid ${TOKENS.rule}`,
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 13,
+    color: TOKENS.ink,
+    MozAppearance: "textfield",
+  },
+  primaryBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    padding: "9px 16px",
+    fontSize: 13,
+    fontWeight: 500,
+    background: TOKENS.accent,
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+  },
+  primaryBtnSmall: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "7px 14px",
+    fontSize: 12.5,
+    background: TOKENS.accent,
+    color: "#fff",
+    border: "none",
+    borderRadius: 7,
+  },
+  ghostBtn: {
+    padding: "9px 16px",
+    fontSize: 13,
+    background: "transparent",
+    color: TOKENS.inkSoft,
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 8,
+  },
+  ghostBtnSmall: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "6px 12px",
+    fontSize: 12,
+    background: "transparent",
+    color: TOKENS.accent,
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 7,
+  },
+  iconBtn: {
+    width: 30,
+    height: 30,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "#fff",
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 7,
+    color: TOKENS.inkSoft,
+  },
+  iconBtnDanger: {
+    background: TOKENS.danger,
+    color: "#fff",
+    borderColor: TOKENS.danger,
+  },
+  songTitle: {
+    fontFamily: "'Fraunces', serif",
+    fontWeight: 700,
+    fontSize: 26,
+    margin: 0,
+    letterSpacing: "-0.01em",
+  },
+  songArtist: {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 13,
+    color: TOKENS.inkSoft,
+    marginTop: 2,
+  },
+  screenGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+    gap: 14,
+  },
+  previewStrip: {
+    display: "flex",
+    gap: 10,
+    overflowX: "auto",
+    paddingBottom: 4,
+  },
+  screen: {
+    background: TOKENS.screen,
+    borderRadius: 10,
+    aspectRatio: "16 / 9",
+    padding: 16,
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    alignItems: "center",
+    position: "relative",
+    textAlign: "center",
+  },
+  screenSmall: {
+    minWidth: 150,
+    width: 150,
+    flexShrink: 0,
+    padding: 10,
+  },
+  eyebrow: {
+    position: "absolute",
+    top: 10,
+    left: 12,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    color: TOKENS.screenText,
+    opacity: 0.5,
+  },
+  screenLines: {
+    fontFamily: "'Fraunces', serif",
+    fontWeight: 600,
+    fontSize: 16,
+    lineHeight: 1.4,
+    color: TOKENS.screenText,
+  },
+  screenLinesSmall: {
+    fontFamily: "'Fraunces', serif",
+    fontWeight: 600,
+    fontSize: 10.5,
+    lineHeight: 1.35,
+    color: TOKENS.screenText,
+  },
+};
