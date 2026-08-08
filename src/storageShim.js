@@ -1,15 +1,17 @@
-// Polyfills the window.storage API that Claude artifacts provide, using the
-// browser's localStorage instead. This means the app code itself needs zero
-// changes — it still calls window.storage.get/set/delete/list exactly as
-// before.
+// Polyfills the window.storage API that Claude artifacts provide, backed by
+// Supabase Postgres instead of localStorage, so the library is shared across
+// everyone who opens the app (see README.md for the Supabase setup steps).
 //
-// IMPORTANT: localStorage is per-browser, per-device. Setting `shared: true`
-// here does NOT make the library visible to other people the way it did
-// inside Claude — it's still just your own browser's storage. If you want a
-// real shared library across your team, see the Supabase notes in README.md
-// and swap this file for a networked version.
+// Requires VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file.
+
+import { createClient } from "@supabase/supabase-js";
 
 const PREFIX = "worship-slide-library";
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 function fullKey(key, shared) {
   return `${PREFIX}:${shared ? "shared" : "personal"}:${key}`;
@@ -21,32 +23,39 @@ function stripPrefix(fullKeyStr, shared) {
 
 window.storage = {
   async get(key, shared = false) {
-    const raw = localStorage.getItem(fullKey(key, shared));
-    if (raw === null) {
-      throw new Error(`Key not found: ${key}`);
-    }
-    return { key, value: raw, shared };
+    const { data, error } = await supabase
+      .from("song_storage")
+      .select("value")
+      .eq("key", fullKey(key, shared))
+      .single();
+    if (error || !data) throw new Error(`Key not found: ${key}`);
+    return { key, value: data.value, shared };
   },
 
   async set(key, value, shared = false) {
-    localStorage.setItem(fullKey(key, shared), value);
+    const { error } = await supabase
+      .from("song_storage")
+      .upsert({ key: fullKey(key, shared), value });
+    if (error) throw new Error(error.message);
     return { key, value, shared };
   },
 
   async delete(key, shared = false) {
-    localStorage.removeItem(fullKey(key, shared));
+    const { error } = await supabase
+      .from("song_storage")
+      .delete()
+      .eq("key", fullKey(key, shared));
+    if (error) throw new Error(error.message);
     return { key, deleted: true, shared };
   },
 
   async list(prefix = "", shared = false) {
     const wantedPrefix = fullKey(prefix, shared);
-    const keys = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(wantedPrefix)) {
-        keys.push(stripPrefix(k, shared));
-      }
-    }
-    return { keys, prefix, shared };
+    const { data, error } = await supabase
+      .from("song_storage")
+      .select("key")
+      .like("key", `${wantedPrefix}%`);
+    if (error) throw new Error(error.message);
+    return { keys: (data || []).map((r) => stripPrefix(r.key, shared)), prefix, shared };
   },
 };
