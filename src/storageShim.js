@@ -49,13 +49,21 @@ window.storage = {
     return { key, deleted: true, shared };
   },
 
+  // Fetches values along with keys in one round trip — callers that need
+  // every entry's contents (e.g. building the song library) can read
+  // `values` directly instead of following up with N individual get()s.
   async list(prefix = "", shared = false) {
     const wantedPrefix = fullKey(prefix, shared);
     const { data, error } = await supabase
       .from("song_storage")
-      .select("key")
+      .select("key,value")
       .like("key", `${wantedPrefix}%`);
     if (error) throw new Error(error.message);
-    return { keys: (data || []).map((r) => stripPrefix(r.key, shared)), prefix, shared };
+    return {
+      keys: (data || []).map((r) => stripPrefix(r.key, shared)),
+      values: (data || []).map((r) => r.value),
+      prefix,
+      shared,
+    };
   },
 };

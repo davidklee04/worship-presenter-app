@@ -426,10 +426,10 @@ async function listSongs() {
   const idx = await window.storage.list("songs:", true);
   if (!idx || !idx.keys || idx.keys.length === 0) return [];
   const out = [];
-  for (const key of idx.keys) {
+  for (const raw of idx.values) {
+    if (!raw) continue;
     try {
-      const res = await window.storage.get(key, true);
-      if (res && res.value) out.push(JSON.parse(res.value));
+      out.push(JSON.parse(raw));
     } catch (e) {
       // skip unreadable entry
     }
