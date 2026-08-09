@@ -163,33 +163,67 @@ function exportText(song) {
   return song.allCaps ? text.toUpperCase() : text;
 }
 
+// ---------- Shared CDN script loader ----------
+// Caches the in-flight/loaded promise on window so repeat calls don't
+// re-inject the script — but a failed load clears its own cache entry, so
+// the next attempt actually retries instead of replaying the same
+// rejection forever (a real problem: without this, one transient network
+// blip permanently breaks that export type until the page is reloaded).
+function loadScriptOnce(cacheKey, src, getGlobal, errorMessage, onReady) {
+  if (window[cacheKey]) return window[cacheKey];
+
+  const promise = new Promise((resolve, reject) => {
+    const finish = (value) => {
+      try {
+        resolve(onReady ? onReady(value) : value);
+      } catch (e) {
+        reject(e);
+      }
+    };
+
+    const existing = getGlobal();
+    if (existing) {
+      finish(existing);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = src;
+    script.onload = () => {
+      const loaded = getGlobal();
+      if (!loaded) {
+        reject(new Error(errorMessage));
+        return;
+      }
+      finish(loaded);
+    };
+    script.onerror = () => reject(new Error(errorMessage));
+    document.head.appendChild(script);
+  });
+
+  promise.catch(() => {
+    if (window[cacheKey] === promise) window[cacheKey] = null;
+  });
+
+  window[cacheKey] = promise;
+  return promise;
+}
+
 // ---------- PDF import (client-side, via pdf.js) ----------
 
 const PDFJS_SCRIPT = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 function loadPdfJs() {
-  if (window.__pdfjsLoadPromise) return window.__pdfjsLoadPromise;
-  window.__pdfjsLoadPromise = new Promise((resolve, reject) => {
-    if (window.pdfjsLib) {
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-      resolve(window.pdfjsLib);
-      return;
+  return loadScriptOnce(
+    "__pdfjsLoadPromise",
+    PDFJS_SCRIPT,
+    () => window.pdfjsLib,
+    "Couldn't load the PDF reader library.",
+    (lib) => {
+      lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+      return lib;
     }
-    const script = document.createElement("script");
-    script.src = PDFJS_SCRIPT;
-    script.onload = () => {
-      try {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-        resolve(window.pdfjsLib);
-      } catch (e) {
-        reject(e);
-      }
-    };
-    script.onerror = () => reject(new Error("Couldn't load the PDF reader library."));
-    document.head.appendChild(script);
-  });
-  return window.__pdfjsLoadPromise;
+  );
 }
 
 function joinRowItems(its) {
@@ -353,19 +387,12 @@ async function extractChordSheetFromPdf(pdfjsLib, arrayBuffer) {
 }
 
 function loadPptxGenJs() {
-  if (window.__pptxgenjsLoadPromise) return window.__pptxgenjsLoadPromise;
-  window.__pptxgenjsLoadPromise = new Promise((resolve, reject) => {
-    if (window.PptxGenJS) {
-      resolve(window.PptxGenJS);
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pptxgenjs/3.12.0/pptxgen.bundle.js";
-    script.onload = () => resolve(window.PptxGenJS);
-    script.onerror = () => reject(new Error("Couldn't load the slide export library."));
-    document.head.appendChild(script);
-  });
-  return window.__pptxgenjsLoadPromise;
+  return loadScriptOnce(
+    "__pptxgenjsLoadPromise",
+    "https://cdnjs.cloudflare.com/ajax/libs/pptxgenjs/3.12.0/pptxgen.bundle.js",
+    () => window.PptxGenJS,
+    "Couldn't load the slide export library."
+  );
 }
 
 const PPTX_BG = "0D0B09";
@@ -444,19 +471,12 @@ async function downloadSetlistAsPptx(setlist, songs) {
 // ---------- Chord sheet PDF export (via jsPDF, CDN-loaded) ----------
 
 function loadJsPdf() {
-  if (window.__jspdfLoadPromise) return window.__jspdfLoadPromise;
-  window.__jspdfLoadPromise = new Promise((resolve, reject) => {
-    if (window.jspdf) {
-      resolve(window.jspdf);
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-    script.onload = () => resolve(window.jspdf);
-    script.onerror = () => reject(new Error("Couldn't load the PDF export library."));
-    document.head.appendChild(script);
-  });
-  return window.__jspdfLoadPromise;
+  return loadScriptOnce(
+    "__jspdfLoadPromise",
+    "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",
+    () => window.jspdf,
+    "Couldn't load the PDF export library."
+  );
 }
 
 // Draws one song's typeset chord sheet (title + artist + rawText, wrapped
@@ -513,19 +533,12 @@ async function buildTypesetChordSheetBytes(song) {
 // ---------- PDF merging (via pdf-lib, CDN-loaded) ----------
 
 function loadPdfLib() {
-  if (window.__pdflibLoadPromise) return window.__pdflibLoadPromise;
-  window.__pdflibLoadPromise = new Promise((resolve, reject) => {
-    if (window.PDFLib) {
-      resolve(window.PDFLib);
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
-    script.onload = () => resolve(window.PDFLib);
-    script.onerror = () => reject(new Error("Couldn't load the PDF merge library."));
-    document.head.appendChild(script);
-  });
-  return window.__pdflibLoadPromise;
+  return loadScriptOnce(
+    "__pdflibLoadPromise",
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js",
+    () => window.PDFLib,
+    "Couldn't load the PDF merge library."
+  );
 }
 
 function downloadBytesAsFile(bytes, fileName) {
