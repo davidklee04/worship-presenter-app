@@ -16,6 +16,8 @@ import {
   ArrowUp,
   ArrowDown,
   FileText,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 // ---------- Chord-sheet parsing ----------
@@ -890,7 +892,7 @@ function MiniScreen({ slide, fontFamily, fontSize, showLabels }) {
   );
 }
 
-function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelete }) {
+function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelete, hideDelete = false }) {
   const slides = useMemo(() => buildSlides(song), [song]);
   const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -929,16 +931,18 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
           <button onClick={onEdit} style={styles.iconBtn} title="Edit">
             <Pencil size={15} />
           </button>
-          <button
-            onClick={onDelete}
-            style={{ ...styles.iconBtn, ...(confirmingDelete ? styles.iconBtnDanger : {}) }}
-            title="Delete"
-          >
-            <Trash2 size={15} />
-          </button>
+          {!hideDelete && (
+            <button
+              onClick={onDelete}
+              style={{ ...styles.iconBtn, ...(confirmingDelete ? styles.iconBtnDanger : {}) }}
+              title="Delete"
+            >
+              <Trash2 size={15} />
+            </button>
+          )}
         </div>
       </div>
-      {confirmingDelete && (
+      {!hideDelete && confirmingDelete && (
         <div style={{ fontFamily: "Inter", fontSize: 12, color: TOKENS.danger, marginBottom: 12 }}>
           Click delete again to permanently remove this song.
         </div>
@@ -1049,13 +1053,21 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
   );
 }
 
-function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, saving, confirmingDelete }) {
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdateSong, saving, confirmingDelete }) {
   const [name, setName] = useState(initial?.name || "");
+  const [date, setDate] = useState(initial?.date || todayIsoDate());
   const [songIds, setSongIds] = useState(initial?.songIds || []);
   const [query, setQuery] = useState("");
   const [downloadingPptx, setDownloadingPptx] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [downloadError, setDownloadError] = useState(null);
+  const [expandedSongId, setExpandedSongId] = useState(null);
+  const [editingSongId, setEditingSongId] = useState(null);
+  const [savingSongId, setSavingSongId] = useState(null);
 
   const songById = useMemo(() => {
     const m = new Map();
@@ -1091,6 +1103,25 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, saving,
 
   const canSave = name.trim().length > 0 && songIds.length > 0;
 
+  const toggleExpanded = (id) => {
+    setEditingSongId(null);
+    setExpandedSongId((prev) => (prev === id ? null : id));
+  };
+
+  const handleInlineSongSave = async (song, data) => {
+    setSavingSongId(song.id);
+    try {
+      await onUpdateSong({ ...song, ...data });
+      setEditingSongId(null);
+    } finally {
+      setSavingSongId(null);
+    }
+  };
+
+  const handleInlineSongSettings = async (song, patch) => {
+    await onUpdateSong({ ...song, ...patch });
+  };
+
   const handleDownloadPptx = async () => {
     setDownloadingPptx(true);
     setDownloadError(null);
@@ -1117,14 +1148,20 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, saving,
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 720 }}>
-      <div>
-        <label style={styles.label}>Setlist name</label>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Sunday service — Aug 9"
-          style={styles.input}
-        />
+      <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ flex: 2 }}>
+          <label style={styles.label}>Setlist name</label>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Sunday service — Aug 9"
+            style={styles.input}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={styles.label}>Date</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={styles.input} />
+        </div>
       </div>
 
       <div>
@@ -1171,31 +1208,61 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, saving,
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {orderedSongs.map((s, i) => (
-            <div key={s.id} style={styles.setlistRow}>
-              <span style={styles.setlistRowIndex}>{i + 1}</span>
-              <div style={{ flex: 1 }}>
-                <div style={styles.songItemTitle}>{s.title}</div>
-                {s.artist && <div style={styles.songItemArtist}>{s.artist}</div>}
+            <div key={s.id}>
+              <div style={styles.setlistRow}>
+                <span style={styles.setlistRowIndex}>{i + 1}</span>
+                <button
+                  onClick={() => toggleExpanded(s.id)}
+                  style={{ ...styles.setlistRowTitle, flex: 1 }}
+                  title="Preview slides"
+                >
+                  <div style={styles.songItemTitle}>{s.title}</div>
+                  {s.artist && <div style={styles.songItemArtist}>{s.artist}</div>}
+                </button>
+                <button onClick={() => toggleExpanded(s.id)} style={styles.iconBtn} title="Preview slides">
+                  {expandedSongId === s.id ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+                <button
+                  onClick={() => moveSong(i, -1)}
+                  disabled={i === 0}
+                  style={{ ...styles.iconBtn, opacity: i === 0 ? 0.4 : 1 }}
+                  title="Move up"
+                >
+                  <ArrowUp size={13} />
+                </button>
+                <button
+                  onClick={() => moveSong(i, 1)}
+                  disabled={i === orderedSongs.length - 1}
+                  style={{ ...styles.iconBtn, opacity: i === orderedSongs.length - 1 ? 0.4 : 1 }}
+                  title="Move down"
+                >
+                  <ArrowDown size={13} />
+                </button>
+                <button onClick={() => removeSong(s.id)} style={styles.iconBtn} title="Remove">
+                  <X size={13} />
+                </button>
               </div>
-              <button
-                onClick={() => moveSong(i, -1)}
-                disabled={i === 0}
-                style={{ ...styles.iconBtn, opacity: i === 0 ? 0.4 : 1 }}
-                title="Move up"
-              >
-                <ArrowUp size={13} />
-              </button>
-              <button
-                onClick={() => moveSong(i, 1)}
-                disabled={i === orderedSongs.length - 1}
-                style={{ ...styles.iconBtn, opacity: i === orderedSongs.length - 1 ? 0.4 : 1 }}
-                title="Move down"
-              >
-                <ArrowDown size={13} />
-              </button>
-              <button onClick={() => removeSong(s.id)} style={styles.iconBtn} title="Remove">
-                <X size={13} />
-              </button>
+
+              {expandedSongId === s.id && (
+                <div style={styles.setlistExpanded}>
+                  {editingSongId === s.id ? (
+                    <SongForm
+                      key={`inline-edit-${s.id}`}
+                      initial={s}
+                      onCancel={() => setEditingSongId(null)}
+                      onSave={(data) => handleInlineSongSave(s, data)}
+                      saving={savingSongId === s.id}
+                    />
+                  ) : (
+                    <SongPreview
+                      song={s}
+                      onEdit={() => setEditingSongId(s.id)}
+                      onUpdateSettings={(patch) => handleInlineSongSettings(s, patch)}
+                      hideDelete
+                    />
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1206,7 +1273,7 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, saving,
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button
           disabled={!canSave || saving}
-          onClick={() => onSave({ name: name.trim(), songIds })}
+          onClick={() => onSave({ name: name.trim(), date, songIds })}
           style={{ ...styles.primaryBtn, opacity: canSave && !saving ? 1 : 0.5 }}
         >
           {saving ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
@@ -1254,6 +1321,87 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, saving,
         load it once for the whole service. The chord sheet PDF has one song's original
         chords-and-lyrics per page, for the band to read from.
       </p>
+    </div>
+  );
+}
+
+function formatHistoryDate(iso) {
+  if (!iso) return "Never";
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function HistoryView({ songs, setlists }) {
+  const [sortMode, setSortMode] = useState("frequency"); // 'frequency' | 'recent'
+
+  const stats = useMemo(() => {
+    const usageBySongId = new Map();
+    setlists.forEach((sl) => {
+      (sl.songIds || []).forEach((id) => {
+        if (!usageBySongId.has(id)) usageBySongId.set(id, []);
+        usageBySongId.get(id).push(sl.date || null);
+      });
+    });
+
+    return songs
+      .map((s) => {
+        const dates = (usageBySongId.get(s.id) || []).filter(Boolean).sort().reverse();
+        return { song: s, count: usageBySongId.get(s.id)?.length || 0, lastUsed: dates[0] || null };
+      })
+      .sort((a, b) => {
+        if (sortMode === "frequency") {
+          if (b.count !== a.count) return b.count - a.count;
+          return (b.lastUsed || "").localeCompare(a.lastUsed || "");
+        }
+        if (a.lastUsed && b.lastUsed) return b.lastUsed.localeCompare(a.lastUsed);
+        if (a.lastUsed) return -1;
+        if (b.lastUsed) return 1;
+        return b.count - a.count;
+      });
+  }, [songs, setlists, sortMode]);
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <h2 style={styles.songTitle}>Song History</h2>
+        <div style={styles.toggleGroup}>
+          <button
+            onClick={() => setSortMode("frequency")}
+            style={{ ...styles.toggleBtn, ...(sortMode === "frequency" ? styles.toggleBtnActive : {}) }}
+          >
+            Most used
+          </button>
+          <button
+            onClick={() => setSortMode("recent")}
+            style={{ ...styles.toggleBtn, ...(sortMode === "recent" ? styles.toggleBtnActive : {}) }}
+          >
+            Most recent
+          </button>
+        </div>
+      </div>
+
+      {setlists.length === 0 ? (
+        <p style={{ fontFamily: "Inter", fontSize: 13, color: TOKENS.inkSoft, lineHeight: 1.6 }}>
+          No setlists saved yet — once you build and save dated setlists, this tracks how often
+          and how recently each song's been used.
+        </p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {stats.map(({ song, count, lastUsed }) => (
+            <div key={song.id} style={styles.historyRow}>
+              <div style={{ flex: 1 }}>
+                <div style={styles.songItemTitle}>{song.title}</div>
+                {song.artist && <div style={styles.songItemArtist}>{song.artist}</div>}
+              </div>
+              <div style={styles.historyStat}>
+                <span style={styles.historyCount}>{count}</span>
+                <span style={styles.historyCountLabel}>{count === 1 ? "time" : "times"}</span>
+              </div>
+              <div style={styles.historyLastUsed}>{formatHistoryDate(lastUsed)}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1495,6 +1643,17 @@ export default function WorshipSlideLibrary() {
     }
   };
 
+  // Used by the setlist builder's inline preview/edit — saves a full song
+  // object (not just the currently-selected library song).
+  const handleUpdateSong = async (song) => {
+    setSongs((prev) => prev.map((s) => (s.id === song.id ? song : s)));
+    try {
+      await saveSongToStorage(song);
+    } catch (e) {
+      setError("Couldn't save that change. Try again.");
+    }
+  };
+
   return (
     <div style={styles.app}>
       <style>{FONTS}{`
@@ -1524,7 +1683,7 @@ export default function WorshipSlideLibrary() {
           <div style={styles.sidebarHeader}>
             <div style={styles.brand}>
               <Music4 size={16} color={TOKENS.accent} strokeWidth={2} />
-              <span>{view === "library" ? "Song Library" : "Setlists"}</span>
+              <span>{view === "library" ? "Song Library" : view === "setlists" ? "Setlists" : "History"}</span>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               {view === "library" && (
@@ -1550,13 +1709,20 @@ export default function WorshipSlideLibrary() {
             </div>
           </div>
 
-          <div style={{ margin: "0 16px 12px" }}>
-            <ToggleSwitch
-              value={view === "setlists"}
-              onChange={(v) => setView(v ? "setlists" : "library")}
-              onLabel="Setlists"
-              offLabel="Library"
-            />
+          <div style={{ ...styles.toggleGroup, margin: "0 16px 12px" }}>
+            {[
+              { key: "library", label: "Library" },
+              { key: "setlists", label: "Setlists" },
+              { key: "history", label: "History" },
+            ].map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setView(t.key)}
+                style={{ ...styles.toggleBtn, flex: 1, ...(view === t.key ? styles.toggleBtnActive : {}) }}
+              >
+                {t.label}
+              </button>
+            ))}
           </div>
 
           <div style={styles.sharedBadge}>
@@ -1734,6 +1900,7 @@ export default function WorshipSlideLibrary() {
                 onCancel={closeSetlistBuilder}
                 onSave={handleSaveSetlist}
                 onDelete={() => handleDeleteSetlist(selectedSetlist.id)}
+                onUpdateSong={handleUpdateSong}
                 saving={savingSetlist}
                 confirmingDelete={confirmDeleteSetlistId === selectedSetlistId}
               />
@@ -1749,6 +1916,8 @@ export default function WorshipSlideLibrary() {
               </p>
             </div>
           )}
+
+          {view === "history" && <HistoryView songs={songs} setlists={setlists} />}
         </div>
       </div>
     </div>
@@ -1918,6 +2087,56 @@ const styles = {
     width: 18,
     textAlign: "center",
     flexShrink: 0,
+  },
+  setlistRowTitle: {
+    display: "block",
+    textAlign: "left",
+    background: "transparent",
+    border: "none",
+    padding: 0,
+  },
+  setlistExpanded: {
+    marginTop: 6,
+    marginBottom: 6,
+    padding: 16,
+    background: TOKENS.paper,
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 8,
+  },
+  historyRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 16,
+    padding: "10px 14px",
+    background: "#fff",
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 8,
+  },
+  historyStat: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 4,
+    width: 70,
+    flexShrink: 0,
+  },
+  historyCount: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 15,
+    fontWeight: 600,
+    color: TOKENS.accent,
+  },
+  historyCountLabel: {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 11,
+    color: TOKENS.inkSoft,
+  },
+  historyLastUsed: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11.5,
+    color: TOKENS.inkSoft,
+    width: 100,
+    flexShrink: 0,
+    textAlign: "right",
   },
   main: {
     padding: "28px 32px",
