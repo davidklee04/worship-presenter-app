@@ -395,9 +395,9 @@ function loadPptxGenJs() {
   );
 }
 
-const PPTX_BG = "0D0B09";
-const PPTX_TEXT = "FAF6EE";
-const PPTX_MUTED = "8C8478";
+const PPTX_BG = "10151C";
+const PPTX_TEXT = "F2F6FA";
+const PPTX_MUTED = "8A96A6";
 
 function addSongToPresentation(pres, song) {
   const fontOpt = FONT_OPTIONS.find((f) => f.value === song.fontFamily) || FONT_OPTIONS[0];
@@ -662,18 +662,18 @@ const MAIN_PREVIEW_RATIO = 16 / 36;
 const MINI_PREVIEW_RATIO = 10.5 / 36;
 
 const TOKENS = {
-  paper: "#F5F1E8",
-  paperDeep: "#EDE6D6",
-  ink: "#2C2620",
-  inkSoft: "#6B6154",
-  rule: "#DDD2BC",
-  accent: "#6E4A2E",
-  accentSoft: "#8C6A4A",
-  screen: "#151210",
-  screenText: "#FAF6EE",
-  danger: "#9A3B2E",
-  info: "#4B6355",
-  infoBg: "#E4EAE1",
+  paper: "#EFF4F9",
+  paperDeep: "#E1EAF4",
+  ink: "#1E2B3A",
+  inkSoft: "#5C6B7C",
+  rule: "#C7D4E1",
+  accent: "#2C5C8A",
+  accentSoft: "#4A7CAA",
+  screen: "#10151C",
+  screenText: "#F2F6FA",
+  danger: "#B0403A",
+  info: "#3A6EA5",
+  infoBg: "#DCE7F2",
 };
 
 function EmptyLibrary({ onAdd, onImport }) {
