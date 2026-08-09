@@ -554,6 +554,10 @@ async function deleteSetlistFromStorage(id) {
   await window.storage.delete(`setlists:${id}`, true);
 }
 
+function pdfPublicUrl(pdfPath) {
+  return `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/${pdfPath}`;
+}
+
 // ---------- UI ----------
 
 const FONTS = `
@@ -928,6 +932,16 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
           {slides.length} slide{slides.length === 1 ? "" : "s"}
         </span>
         <div style={{ flex: 1 }} />
+        {song.pdfPath && (
+          <a
+            href={pdfPublicUrl(song.pdfPath)}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ ...styles.ghostBtnSmall, textDecoration: "none" }}
+          >
+            <FileText size={13} /> View original PDF
+          </a>
+        )}
         <button onClick={handleCopy} style={styles.ghostBtnSmall}>
           <Copy size={13} /> {copied ? "Copied!" : "Copy as text"}
         </button>
