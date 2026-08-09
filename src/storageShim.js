@@ -66,4 +66,15 @@ window.storage = {
       shared,
     };
   },
+
+  // Uploads a file to Supabase Storage (separate from the song_storage
+  // table above, used for the original chord-sheet PDFs).
+  async uploadFile(bucket, path, data, contentType) {
+    const { error } = await supabase.storage.from(bucket).upload(path, data, {
+      contentType,
+      upsert: true,
+    });
+    if (error) throw new Error(error.message);
+    return { path: `${bucket}/${path}` };
+  },
 };

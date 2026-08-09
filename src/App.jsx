@@ -452,52 +452,111 @@ function loadJsPdf() {
   return window.__jspdfLoadPromise;
 }
 
-async function downloadSetlistChordSheetsAsPdf(setlist, songs) {
-  const { jsPDF } = await loadJsPdf();
-  const doc = new jsPDF({ unit: "pt", format: "letter" });
+// Draws one song's typeset chord sheet (title + artist + rawText, wrapped
+// and paginated) into a jsPDF document, starting at whatever page is
+// currently active. Used both as the fallback for songs with no original
+// PDF, and as the whole-library export for a single song's "text" version.
+function drawChordSheetPages(doc, song) {
   const margin = 54;
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const maxWidth = pageWidth - margin * 2;
   const lineHeight = 13;
+  let y = margin;
 
-  songs.forEach((song, i) => {
-    if (i > 0) doc.addPage();
-    let y = margin;
+  doc.setFont("courier", "bold");
+  doc.setFontSize(16);
+  doc.text(song.title || "Untitled", margin, y);
+  y += 20;
 
-    doc.setFont("courier", "bold");
-    doc.setFontSize(16);
-    doc.text(song.title || "Untitled", margin, y);
-    y += 20;
-
-    if (song.artist) {
-      doc.setFont("courier", "normal");
-      doc.setFontSize(11);
-      doc.setTextColor(110, 110, 110);
-      doc.text(song.artist, margin, y);
-      doc.setTextColor(0, 0, 0);
-      y += 22;
-    } else {
-      y += 10;
-    }
-
+  if (song.artist) {
     doc.setFont("courier", "normal");
-    doc.setFontSize(10.5);
-    const rawLines = (song.rawText || "").replace(/\r/g, "").split("\n");
-    for (const line of rawLines) {
-      const wrapped = doc.splitTextToSize(line.length ? line : " ", maxWidth);
-      for (const w of wrapped) {
-        if (y > pageHeight - margin) {
-          doc.addPage();
-          y = margin;
-        }
-        doc.text(w, margin, y);
-        y += lineHeight;
-      }
-    }
-  });
+    doc.setFontSize(11);
+    doc.setTextColor(110, 110, 110);
+    doc.text(song.artist, margin, y);
+    doc.setTextColor(0, 0, 0);
+    y += 22;
+  } else {
+    y += 10;
+  }
 
-  doc.save(`${safeFileName(setlist.name || "setlist", "setlist")}-chord-sheets.pdf`);
+  doc.setFont("courier", "normal");
+  doc.setFontSize(10.5);
+  const rawLines = (song.rawText || "").replace(/\r/g, "").split("\n");
+  for (const line of rawLines) {
+    const wrapped = doc.splitTextToSize(line.length ? line : " ", maxWidth);
+    for (const w of wrapped) {
+      if (y > pageHeight - margin) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.text(w, margin, y);
+      y += lineHeight;
+    }
+  }
+}
+
+async function buildTypesetChordSheetBytes(song) {
+  const { jsPDF } = await loadJsPdf();
+  const doc = new jsPDF({ unit: "pt", format: "letter" });
+  drawChordSheetPages(doc, song);
+  return doc.output("arraybuffer");
+}
+
+// ---------- PDF merging (via pdf-lib, CDN-loaded) ----------
+
+function loadPdfLib() {
+  if (window.__pdflibLoadPromise) return window.__pdflibLoadPromise;
+  window.__pdflibLoadPromise = new Promise((resolve, reject) => {
+    if (window.PDFLib) {
+      resolve(window.PDFLib);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+    script.onload = () => resolve(window.PDFLib);
+    script.onerror = () => reject(new Error("Couldn't load the PDF merge library."));
+    document.head.appendChild(script);
+  });
+  return window.__pdflibLoadPromise;
+}
+
+function downloadBytesAsFile(bytes, fileName) {
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Builds one combined PDF for the setlist: each song contributes its
+// original chord-sheet PDF (as uploaded on import) where one exists, or a
+// typeset fallback page built from its stored lyrics/chords otherwise —
+// so every song in the setlist ends up in the download either way.
+async function downloadSetlistChordSheetsAsPdf(setlist, songs) {
+  const { PDFDocument } = await loadPdfLib();
+  const merged = await PDFDocument.create();
+
+  for (const song of songs) {
+    let bytes;
+    if (song.pdfPath) {
+      const res = await fetch(pdfPublicUrl(song.pdfPath));
+      if (!res.ok) throw new Error(`Couldn't fetch the original PDF for "${song.title}".`);
+      bytes = await res.arrayBuffer();
+    } else {
+      bytes = await buildTypesetChordSheetBytes(song);
+    }
+    const srcDoc = await PDFDocument.load(bytes);
+    const pages = await merged.copyPages(srcDoc, srcDoc.getPageIndices());
+    pages.forEach((p) => merged.addPage(p));
+  }
+
+  const mergedBytes = await merged.save();
+  downloadBytesAsFile(mergedBytes, `${safeFileName(setlist.name || "setlist", "setlist")}-chord-sheets.pdf`);
 }
 
 // ---------- Storage helpers ----------
@@ -1207,6 +1266,7 @@ export default function WorshipSlideLibrary() {
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
   const [pendingImport, setPendingImport] = useState(null);
+  const [pendingImportFile, setPendingImportFile] = useState(null);
   const [formKey, setFormKey] = useState(0);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState(null);
@@ -1309,6 +1369,7 @@ export default function WorshipSlideLibrary() {
 
   const startBlankAdd = () => {
     setPendingImport(null);
+    setPendingImportFile(null);
     setImportError(null);
     setFormKey((k) => k + 1);
     setMode("add");
@@ -1352,6 +1413,7 @@ export default function WorshipSlideLibrary() {
         __importNote:
           "Imported from PDF — chord-stripping and column order are best-effort. Please review the lyrics below before saving.",
       });
+      setPendingImportFile(file);
       setFormKey((k) => k + 1);
       setMode("add");
       setSelectedId(null);
@@ -1366,10 +1428,20 @@ export default function WorshipSlideLibrary() {
     setSaving(true);
     try {
       const song = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...data };
+      if (pendingImportFile) {
+        try {
+          const buf = await pendingImportFile.arrayBuffer();
+          const uploaded = await window.storage.uploadFile("chord-sheets", `${song.id}.pdf`, buf, "application/pdf");
+          song.pdfPath = uploaded.path;
+        } catch (e) {
+          // best-effort — the song still saves even if the original PDF fails to upload
+        }
+      }
       await saveSongToStorage(song);
       await refresh();
       setSelectedId(song.id);
       setPendingImport(null);
+      setPendingImportFile(null);
       setMode("preview");
     } catch (e) {
       setError("Couldn't save that song. Try again.");
@@ -1604,6 +1676,7 @@ export default function WorshipSlideLibrary() {
                     initial={pendingImport}
                     onCancel={() => {
                       setPendingImport(null);
+                      setPendingImportFile(null);
                       setMode("preview");
                     }}
                     onSave={handleSaveNew}
