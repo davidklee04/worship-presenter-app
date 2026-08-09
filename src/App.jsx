@@ -389,7 +389,7 @@ async function extractChordSheetFromPdf(pdfjsLib, arrayBuffer) {
 function loadPptxGenJs() {
   return loadScriptOnce(
     "__pptxgenjsLoadPromise",
-    "https://cdnjs.cloudflare.com/ajax/libs/pptxgenjs/3.12.0/pptxgen.bundle.js",
+    "https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js",
     () => window.PptxGenJS,
     "Couldn't load the slide export library."
   );
