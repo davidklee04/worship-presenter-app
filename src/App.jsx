@@ -1451,7 +1451,7 @@ function HistoryView({ songs, setlists }) {
           and how recently each song's been used.
         </p>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={styles.historyList}>
           {stats.map(({ song, count, lastUsed }) => (
             <div key={song.id} style={styles.historyRow}>
               <div style={{ flex: 1 }}>
@@ -2235,6 +2235,14 @@ const styles = {
     width: 100,
     flexShrink: 0,
     textAlign: "right",
+  },
+  historyList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    maxHeight: 440,
+    overflowY: "auto",
+    paddingRight: 4,
   },
   main: {
     padding: "28px 32px",
