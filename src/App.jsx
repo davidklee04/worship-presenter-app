@@ -743,12 +743,23 @@ function SongForm({ initial, onCancel, onSave, saving }) {
   const [fontSize, setFontSize] = useState(initial?.fontSize || DEFAULT_FONT_SIZE);
   const [showLabels, setShowLabels] = useState(initial?.showLabels === true);
   const [allCaps, setAllCaps] = useState(initial?.allCaps === true);
+  const [copied, setCopied] = useState(false);
   const canSave = title.trim().length > 0 && rawText.trim().length > 0;
 
   const preview = useMemo(() => {
     if (!rawText.trim()) return [];
     return buildSlides({ rawText, linesPerSlide });
   }, [rawText, linesPerSlide]);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(exportText({ rawText, linesPerSlide, allCaps }));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch (e) {
+      // clipboard blocked — no-op, button just won't confirm
+    }
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 720 }}>
@@ -836,7 +847,12 @@ function SongForm({ initial, onCancel, onSave, saving }) {
 
       {preview.length > 0 && (
         <div>
-          <label style={styles.label}>Live preview</label>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <label style={styles.label}>Live preview</label>
+            <button onClick={handleCopy} style={styles.ghostBtnSmall}>
+              <Copy size={13} /> {copied ? "Copied!" : "Copy as text"}
+            </button>
+          </div>
           <div style={styles.previewStrip}>
             {preview.slice(0, 6).map((s, i) => (
               <MiniScreen key={i} slide={s} fontFamily={fontFamily} fontSize={fontSize} showLabels={showLabels} allCaps={allCaps} />
@@ -1813,9 +1829,9 @@ export default function WorshipSlideLibrary() {
       />
 
       <div style={styles.appHeader}>
-        <h1 style={styles.appTitle}>Build Your Worship</h1>
+        <h1 style={styles.appTitle}>Build Your Set</h1>
         <p style={styles.appSubtitle}>
-          for the last minute rush. quickly build your setlists and presentations for service.
+          for the last minute scramble. put together your setlist and presentation in seconds.
         </p>
       </div>
 
@@ -2438,7 +2454,7 @@ const styles = {
     width: 168,
   },
   stepper: {
-    display: "flex",
+    display: "inline-flex",
     alignItems: "center",
     border: `1px solid ${TOKENS.rule}`,
     borderRadius: 7,
