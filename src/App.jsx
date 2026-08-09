@@ -465,13 +465,6 @@ function addSongToPresentation(pres, song) {
     const slide = pres.addSlide();
     slide.background = { color: PPTX_BG };
 
-    if (song.showLabels === true) {
-      slide.addText(`${s.section.toUpperCase()}  ·  ${i + 1}/${slides.length}`, {
-        x: 0.6, y: 0.4, w: 8, h: 0.4,
-        fontFace: "Courier New", fontSize: 11, color: PPTX_MUTED, charSpacing: 2, margin: 0,
-      });
-    }
-
     const lineText = s.lines.map((l, idx) => ({
       text: caseText(l),
       options: idx < s.lines.length - 1 ? { breakLine: true } : {},
@@ -751,7 +744,6 @@ function SongForm({ initial, onCancel, onSave, saving }) {
   const [linesPerSlide, setLinesPerSlide] = useState(initial?.linesPerSlide || 2);
   const [fontFamily, setFontFamily] = useState(initial?.fontFamily || DEFAULT_FONT_FAMILY);
   const [fontSize, setFontSize] = useState(initial?.fontSize || DEFAULT_FONT_SIZE);
-  const [showLabels, setShowLabels] = useState(initial?.showLabels === true);
   const [allCaps, setAllCaps] = useState(initial?.allCaps === true);
   const [copied, setCopied] = useState(false);
   const canSave = title.trim().length > 0 && rawText.trim().length > 0;
@@ -846,10 +838,6 @@ function SongForm({ initial, onCancel, onSave, saving }) {
           <NumberStepper value={fontSize} onChange={setFontSize} min={20} max={60} step={2} />
         </div>
         <div>
-          <label style={styles.label}>Section labels</label>
-          <ToggleSwitch value={showLabels} onChange={setShowLabels} onLabel="Shown" offLabel="Hidden" />
-        </div>
-        <div>
           <label style={styles.label}>All caps</label>
           <ToggleSwitch value={allCaps} onChange={setAllCaps} onLabel="On" offLabel="Off" />
         </div>
@@ -865,7 +853,7 @@ function SongForm({ initial, onCancel, onSave, saving }) {
           </div>
           <div style={styles.previewStrip}>
             {preview.slice(0, 6).map((s, i) => (
-              <MiniScreen key={i} slide={s} fontFamily={fontFamily} fontSize={fontSize} showLabels={showLabels} allCaps={allCaps} />
+              <MiniScreen key={i} slide={s} fontFamily={fontFamily} fontSize={fontSize} allCaps={allCaps} />
             ))}
             {preview.length > 6 && (
               <div style={{ ...styles.screen, ...styles.screenSmall, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -889,7 +877,6 @@ function SongForm({ initial, onCancel, onSave, saving }) {
               linesPerSlide,
               fontFamily,
               fontSize,
-              showLabels,
               allCaps,
             })
           }
@@ -954,10 +941,9 @@ function ToggleSwitch({ value, onChange, onLabel = "On", offLabel = "Off" }) {
   );
 }
 
-function MiniScreen({ slide, fontFamily, fontSize, showLabels, allCaps }) {
+function MiniScreen({ slide, fontFamily, fontSize, allCaps }) {
   return (
     <div style={{ ...styles.screen, ...styles.screenSmall }}>
-      {showLabels && <span style={styles.eyebrow}>{slide.section}</span>}
       <div
         style={{
           ...styles.screenLinesSmall,
@@ -1065,15 +1051,6 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
           />
         </div>
         <div>
-          <label style={styles.label}>Section labels</label>
-          <ToggleSwitch
-            value={song.showLabels === true}
-            onChange={(v) => onUpdateSettings({ showLabels: v })}
-            onLabel="Shown"
-            offLabel="Hidden"
-          />
-        </div>
-        <div>
           <label style={styles.label}>All caps</label>
           <ToggleSwitch
             value={song.allCaps === true}
@@ -1115,11 +1092,6 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
       <div style={styles.screenGrid}>
         {slides.map((s, i) => (
           <div key={i} style={styles.screen}>
-            {song.showLabels === true && (
-              <span style={styles.eyebrow}>
-                {s.section} · {i + 1}/{slides.length}
-              </span>
-            )}
             <div
               style={{
                 ...styles.screenLines,
@@ -1166,10 +1138,9 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
   const [useUniformFormat, setUseUniformFormat] = useState(!!initial?.format);
   const [formatFontFamily, setFormatFontFamily] = useState(initial?.format?.fontFamily || DEFAULT_FONT_FAMILY);
   const [formatFontSize, setFormatFontSize] = useState(initial?.format?.fontSize || DEFAULT_FONT_SIZE);
-  const [formatShowLabels, setFormatShowLabels] = useState(initial?.format?.showLabels === true);
   const [formatAllCaps, setFormatAllCaps] = useState(initial?.format?.allCaps === true);
   const uniformFormat = useUniformFormat
-    ? { fontFamily: formatFontFamily, fontSize: formatFontSize, showLabels: formatShowLabels, allCaps: formatAllCaps }
+    ? { fontFamily: formatFontFamily, fontSize: formatFontSize, allCaps: formatAllCaps }
     : null;
 
   const songById = useMemo(() => {
@@ -1437,17 +1408,13 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
               <NumberStepper value={formatFontSize} onChange={setFormatFontSize} min={20} max={60} step={2} />
             </div>
             <div>
-              <label style={styles.label}>Section labels</label>
-              <ToggleSwitch value={formatShowLabels} onChange={setFormatShowLabels} onLabel="Shown" offLabel="Hidden" />
-            </div>
-            <div>
               <label style={styles.label}>All caps</label>
               <ToggleSwitch value={formatAllCaps} onChange={setFormatAllCaps} onLabel="On" offLabel="Off" />
             </div>
           </div>
         ) : (
           <p style={{ fontFamily: "Inter", fontSize: 11.5, color: TOKENS.inkSoft, marginTop: 6, lineHeight: 1.5 }}>
-            Off — the combined .pptx uses each song's own font/size/label settings, so a mixed-format
+            Off — the combined .pptx uses each song's own font/size settings, so a mixed-format
             deck is possible. Turn this on to force one look across every slide for this setlist only;
             it never changes the songs' own settings in your library.
           </p>
@@ -2797,17 +2764,6 @@ const styles = {
     width: 150,
     flexShrink: 0,
     padding: 10,
-  },
-  eyebrow: {
-    position: "absolute",
-    top: 10,
-    left: 12,
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 9,
-    letterSpacing: "0.06em",
-    textTransform: "uppercase",
-    color: TOKENS.screenText,
-    opacity: 0.5,
   },
   screenLines: {
     fontFamily: "'Fraunces', serif",
