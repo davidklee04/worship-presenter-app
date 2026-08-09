@@ -157,9 +157,10 @@ function buildSlides(song) {
 }
 
 function exportText(song) {
-  return buildSlides(song)
+  const text = buildSlides(song)
     .map((s) => s.lines.join("\n"))
     .join("\n\n");
+  return song.allCaps ? text.toUpperCase() : text;
 }
 
 // ---------- PDF import (client-side, via pdf.js) ----------
@@ -375,15 +376,16 @@ function addSongToPresentation(pres, song) {
   const fontOpt = FONT_OPTIONS.find((f) => f.value === song.fontFamily) || FONT_OPTIONS[0];
   const FONT = fontOpt.pptxName;
   const slides = buildSlides(song);
+  const caseText = (t) => (song.allCaps ? t.toUpperCase() : t);
 
   const title = pres.addSlide();
   title.background = { color: PPTX_BG };
-  title.addText(song.title, {
+  title.addText(caseText(song.title), {
     x: 0.8, y: 2.9, w: 11.7, h: 1.4,
     fontFace: FONT, fontSize: 44, bold: true, color: PPTX_TEXT, align: "center", margin: 0,
   });
   if (song.artist) {
-    title.addText(song.artist, {
+    title.addText(caseText(song.artist), {
       x: 0.8, y: 4.25, w: 11.7, h: 0.6,
       fontFace: FONT, fontSize: 18, color: PPTX_MUTED, align: "center", margin: 0,
     });
@@ -401,7 +403,7 @@ function addSongToPresentation(pres, song) {
     }
 
     const lineText = s.lines.map((l, idx) => ({
-      text: l,
+      text: caseText(l),
       options: idx < s.lines.length - 1 ? { breakLine: true } : {},
     }));
 
@@ -624,19 +626,19 @@ function pdfPublicUrl(pdfPath) {
 
 // ---------- UI ----------
 
+// Fraunces/Playfair Display/Bitter/Work Sans/Georgia/Verdana are no longer
+// selectable (see FONT_OPTIONS below) but stay loaded here so any song that
+// already had one of them picked keeps rendering the same way.
 const FONTS = `
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&family=Montserrat:wght@600;700&family=Playfair+Display:wght@600;700&family=Bitter:wght@600;700&family=Work+Sans:wght@600;700&family=Barlow+Condensed:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&family=Montserrat:wght@600;700&family=Playfair+Display:wght@600;700&family=Bitter:wght@600;700&family=Poppins:wght@600;700&family=Work+Sans:wght@600;700&family=Barlow+Condensed:wght@600;700&display=swap');
 `;
 
 const FONT_OPTIONS = [
-  { label: "Georgia (safe for PPT)", value: "Georgia, serif", pptxName: "Georgia", safe: true },
-  { label: "Fraunces (serif)", value: "'Fraunces', serif", pptxName: "Fraunces", safe: false },
-  { label: "Playfair Display (serif)", value: "'Playfair Display', serif", pptxName: "Playfair Display", safe: false },
-  { label: "Bitter (slab serif)", value: "'Bitter', serif", pptxName: "Bitter", safe: false },
-  { label: "Montserrat (sans)", value: "'Montserrat', sans-serif", pptxName: "Montserrat", safe: false },
-  { label: "Work Sans (sans)", value: "'Work Sans', sans-serif", pptxName: "Work Sans", safe: false },
-  { label: "Barlow Condensed (condensed)", value: "'Barlow Condensed', sans-serif", pptxName: "Barlow Condensed", safe: false },
-  { label: "Verdana (safe for PPT)", value: "Verdana, sans-serif", pptxName: "Verdana", safe: true },
+  { label: "Montserrat", value: "'Montserrat', sans-serif", pptxName: "Montserrat", safe: false },
+  { label: "Bebas Neue", value: "'Bebas Neue', sans-serif", pptxName: "Bebas Neue", safe: false },
+  { label: "Helvetica / Arial (safe for PPT)", value: "Helvetica, Arial, sans-serif", pptxName: "Arial", safe: true },
+  { label: "Poppins", value: "'Poppins', sans-serif", pptxName: "Poppins", safe: false },
+  { label: "Barlow Condensed", value: "'Barlow Condensed', sans-serif", pptxName: "Barlow Condensed", safe: false },
 ];
 
 const DEFAULT_FONT_FAMILY = FONT_OPTIONS[0].value; // Georgia
@@ -688,6 +690,7 @@ function SongForm({ initial, onCancel, onSave, saving }) {
   const [fontFamily, setFontFamily] = useState(initial?.fontFamily || DEFAULT_FONT_FAMILY);
   const [fontSize, setFontSize] = useState(initial?.fontSize || DEFAULT_FONT_SIZE);
   const [showLabels, setShowLabels] = useState(initial?.showLabels === true);
+  const [allCaps, setAllCaps] = useState(initial?.allCaps === true);
   const canSave = title.trim().length > 0 && rawText.trim().length > 0;
 
   const preview = useMemo(() => {
@@ -773,6 +776,10 @@ function SongForm({ initial, onCancel, onSave, saving }) {
           <label style={styles.label}>Section labels</label>
           <ToggleSwitch value={showLabels} onChange={setShowLabels} onLabel="Shown" offLabel="Hidden" />
         </div>
+        <div>
+          <label style={styles.label}>All caps</label>
+          <ToggleSwitch value={allCaps} onChange={setAllCaps} onLabel="On" offLabel="Off" />
+        </div>
       </div>
 
       {preview.length > 0 && (
@@ -780,7 +787,7 @@ function SongForm({ initial, onCancel, onSave, saving }) {
           <label style={styles.label}>Live preview</label>
           <div style={styles.previewStrip}>
             {preview.slice(0, 6).map((s, i) => (
-              <MiniScreen key={i} slide={s} fontFamily={fontFamily} fontSize={fontSize} showLabels={showLabels} />
+              <MiniScreen key={i} slide={s} fontFamily={fontFamily} fontSize={fontSize} showLabels={showLabels} allCaps={allCaps} />
             ))}
             {preview.length > 6 && (
               <div style={{ ...styles.screen, ...styles.screenSmall, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -805,6 +812,7 @@ function SongForm({ initial, onCancel, onSave, saving }) {
               fontFamily,
               fontSize,
               showLabels,
+              allCaps,
             })
           }
           style={{ ...styles.primaryBtn, opacity: canSave && !saving ? 1 : 0.5 }}
@@ -873,7 +881,7 @@ function ToggleSwitch({ value, onChange, onLabel = "On", offLabel = "Off" }) {
   );
 }
 
-function MiniScreen({ slide, fontFamily, fontSize, showLabels }) {
+function MiniScreen({ slide, fontFamily, fontSize, showLabels, allCaps }) {
   return (
     <div style={{ ...styles.screen, ...styles.screenSmall }}>
       {showLabels && <span style={styles.eyebrow}>{slide.section}</span>}
@@ -882,6 +890,7 @@ function MiniScreen({ slide, fontFamily, fontSize, showLabels }) {
           ...styles.screenLinesSmall,
           fontFamily: fontFamily || DEFAULT_FONT_FAMILY,
           fontSize: (fontSize || DEFAULT_FONT_SIZE) * MINI_PREVIEW_RATIO,
+          textTransform: allCaps ? "uppercase" : "none",
         }}
       >
         {slide.lines.map((l, i) => (
@@ -991,6 +1000,15 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
             offLabel="Hidden"
           />
         </div>
+        <div>
+          <label style={styles.label}>All caps</label>
+          <ToggleSwitch
+            value={song.allCaps === true}
+            onChange={(v) => onUpdateSettings({ allCaps: v })}
+            onLabel="On"
+            offLabel="Off"
+          />
+        </div>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
@@ -1034,6 +1052,7 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
                 ...styles.screenLines,
                 fontFamily: song.fontFamily || DEFAULT_FONT_FAMILY,
                 fontSize: (song.fontSize || DEFAULT_FONT_SIZE) * MAIN_PREVIEW_RATIO,
+                textTransform: song.allCaps ? "uppercase" : "none",
               }}
             >
               {s.lines.map((l, j) => (
