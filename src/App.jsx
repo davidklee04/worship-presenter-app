@@ -66,7 +66,35 @@ function stripInlineChords(line) {
   // (G) (Am7) — only strip parens whose contents actually look like a chord, so real
   // parenthetical lyrics like "(oh, oh, oh)" survive
   out = out.replace(/\(([^)]+)\)/g, (m, inner) => (isChordyToken(inner.trim()) ? "" : m));
-  return out.replace(/[ \t]{2,}/g, " ");
+  out = out.replace(/[ \t]{2,}/g, " ");
+  return rejoinHyphenatedSyllables(out);
+}
+
+// Chord sheets often hyphenate words to show syllable/note breaks (e.g.
+// "af - ter", "fore-ver", or a melisma stretched out as "Glo-- -----ria")
+// — column extraction from the PDF also tends to add stray spacing around
+// the hyphen. Rejoin these into normal words for the slide text.
+//
+// Only joins when the fragment right before the dash is short (<=4 chars):
+// that reliably matches real syllable fragments ("af", "fore", "spir")
+// without also swallowing a real short word followed by a dash used as a
+// stylistic pause between two separate phrases (e.g. "Thee - God of glory"
+// stays untouched, since "Thee" reads as a complete word either way).
+// Applied repeatedly so multi-hyphen chains fully resolve, e.g.
+// "sat-is-fy" -> "satis-fy" -> "satisfy".
+function rejoinHyphenatedSyllables(text) {
+  const pass = (s) =>
+    s.replace(/([A-Za-z]+)((?:\s*-+\s*)+)([A-Za-z]+)/g, (m, before, dashes, after) =>
+      before.length <= 4 ? before + after : m
+    );
+  let out = text;
+  let next = pass(out);
+  let guard = 0;
+  while (next !== out && guard++ < 5) {
+    out = next;
+    next = pass(out);
+  }
+  return out;
 }
 
 function titleCase(s) {
