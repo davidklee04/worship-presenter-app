@@ -497,7 +497,13 @@ async function downloadSetlistAsPptx(setlist, songs) {
   const PptxGenJS = await loadPptxGenJs();
   const pres = new PptxGenJS();
   pres.layout = "LAYOUT_WIDE";
-  songs.forEach((song) => addSongToPresentation(pres, song));
+  // A uniform format is applied only to this export — it never mutates the
+  // song objects themselves, so each song's own settings in the library
+  // (and in any other setlist) are untouched.
+  songs.forEach((song) => {
+    const exportSong = setlist.format ? { ...song, ...setlist.format } : song;
+    addSongToPresentation(pres, exportSong);
+  });
   await pres.writeFile({ fileName: `${safeFileName(setlist.name || "setlist", "setlist")}.pptx` });
 }
 
@@ -1134,6 +1140,15 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
   const [editingSongId, setEditingSongId] = useState(null);
   const [savingSongId, setSavingSongId] = useState(null);
 
+  const [useUniformFormat, setUseUniformFormat] = useState(!!initial?.format);
+  const [formatFontFamily, setFormatFontFamily] = useState(initial?.format?.fontFamily || DEFAULT_FONT_FAMILY);
+  const [formatFontSize, setFormatFontSize] = useState(initial?.format?.fontSize || DEFAULT_FONT_SIZE);
+  const [formatShowLabels, setFormatShowLabels] = useState(initial?.format?.showLabels === true);
+  const [formatAllCaps, setFormatAllCaps] = useState(initial?.format?.allCaps === true);
+  const uniformFormat = useUniformFormat
+    ? { fontFamily: formatFontFamily, fontSize: formatFontSize, showLabels: formatShowLabels, allCaps: formatAllCaps }
+    : null;
+
   const songById = useMemo(() => {
     const m = new Map();
     allSongs.forEach((s) => m.set(s.id, s));
@@ -1191,7 +1206,7 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
     setDownloadingPptx(true);
     setDownloadError(null);
     try {
-      await downloadSetlistAsPptx({ name: name.trim() || "setlist" }, orderedSongs);
+      await downloadSetlistAsPptx({ name: name.trim() || "setlist", format: uniformFormat }, orderedSongs);
     } catch (e) {
       setDownloadError("Couldn't build the PowerPoint file. Try again.");
     } finally {
@@ -1333,12 +1348,55 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
         </div>
       </div>
 
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <label style={styles.label}>Uniform PowerPoint format</label>
+          <ToggleSwitch value={useUniformFormat} onChange={setUseUniformFormat} onLabel="On" offLabel="Off" />
+        </div>
+        {useUniformFormat ? (
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 20, flexWrap: "wrap", marginTop: 10 }}>
+            <div>
+              <label style={styles.label}>Font</label>
+              <select
+                value={formatFontFamily}
+                onChange={(e) => setFormatFontFamily(e.target.value)}
+                style={styles.select}
+              >
+                {FONT_OPTIONS.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={styles.label}>Font size</label>
+              <NumberStepper value={formatFontSize} onChange={setFormatFontSize} min={20} max={60} step={2} />
+            </div>
+            <div>
+              <label style={styles.label}>Section labels</label>
+              <ToggleSwitch value={formatShowLabels} onChange={setFormatShowLabels} onLabel="Shown" offLabel="Hidden" />
+            </div>
+            <div>
+              <label style={styles.label}>All caps</label>
+              <ToggleSwitch value={formatAllCaps} onChange={setFormatAllCaps} onLabel="On" offLabel="Off" />
+            </div>
+          </div>
+        ) : (
+          <p style={{ fontFamily: "Inter", fontSize: 11.5, color: TOKENS.inkSoft, marginTop: 6, lineHeight: 1.5 }}>
+            Off — the combined .pptx uses each song's own font/size/label settings, so a mixed-format
+            deck is possible. Turn this on to force one look across every slide for this setlist only;
+            it never changes the songs' own settings in your library.
+          </p>
+        )}
+      </div>
+
       {downloadError && <div style={{ ...styles.errorBanner, marginBottom: 0 }}>{downloadError}</div>}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button
           disabled={!canSave || saving}
-          onClick={() => onSave({ name: name.trim(), date, songIds })}
+          onClick={() => onSave({ name: name.trim(), date, songIds, format: uniformFormat })}
           style={{ ...styles.primaryBtn, opacity: canSave && !saving ? 1 : 0.5 }}
         >
           {saving ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
