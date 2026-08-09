@@ -1913,7 +1913,7 @@ export default function WorshipSlideLibrary() {
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @media (max-width: 720px) {
           .wsl-shell { grid-template-columns: 1fr !important; }
-          .wsl-sidebar { border-right: none !important; border-bottom: 1px solid ${TOKENS.rule}; max-height: 260px; }
+          .wsl-sidebar { border-right: none !important; border-bottom: 1px solid ${TOKENS.rule}; }
         }
       `}</style>
 
