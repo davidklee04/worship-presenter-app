@@ -66,9 +66,9 @@ function isChordLine(trimmed) {
 function stripInlineChords(line) {
   // [G] [Am7] [Verse note] — bracketed content is always chord/annotation, strip unconditionally
   let out = line.replace(/\[[^\]]*\]/g, "");
-  // (G) (Am7) — only strip parens whose contents actually look like a chord, so real
-  // parenthetical lyrics like "(oh, oh, oh)" survive
-  out = out.replace(/\(([^)]+)\)/g, (m, inner) => (isChordyToken(inner.trim()) ? "" : m));
+  // Any parenthetical content — chords like "(G)", ad-libs like "(oh, oh, oh)",
+  // repeat markers like "(2x)" — all stripped, not just chord-shaped ones.
+  out = out.replace(/\([^)]*\)/g, "");
   out = out.replace(/[ \t]{2,}/g, " ");
   return rejoinHyphenatedSyllables(out);
 }
@@ -456,15 +456,9 @@ function addSongToPresentation(pres, song) {
   const title = pres.addSlide();
   title.background = { color: PPTX_BG };
   title.addText(caseText(song.title), {
-    x: 0.8, y: 2.9, w: 11.7, h: 1.4,
+    x: 0.8, y: 3.05, w: 11.7, h: 1.4,
     fontFace: FONT, fontSize: 44, bold: true, color: PPTX_TEXT, align: "center", margin: 0,
   });
-  if (song.artist) {
-    title.addText(caseText(song.artist), {
-      x: 0.8, y: 4.25, w: 11.7, h: 0.6,
-      fontFace: FONT, fontSize: 18, color: PPTX_MUTED, align: "center", margin: 0,
-    });
-  }
 
   slides.forEach((s, i) => {
     const slide = pres.addSlide();
