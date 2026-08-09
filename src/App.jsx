@@ -688,7 +688,7 @@ const FONTS = `
 const FONT_OPTIONS = [
   { label: "Montserrat", value: "'Montserrat', sans-serif", pptxName: "Montserrat", safe: false },
   { label: "Bebas Neue", value: "'Bebas Neue', sans-serif", pptxName: "Bebas Neue", safe: false },
-  { label: "Helvetica / Arial (safe for PPT)", value: "Helvetica, Arial, sans-serif", pptxName: "Arial", safe: true },
+  { label: "Helvetica / Arial", value: "Helvetica, Arial, sans-serif", pptxName: "Arial", safe: true },
   { label: "Poppins", value: "'Poppins', sans-serif", pptxName: "Poppins", safe: false },
   { label: "Barlow Condensed", value: "'Barlow Condensed', sans-serif", pptxName: "Barlow Condensed", safe: false },
 ];
@@ -916,20 +916,15 @@ function NumberStepper({ value, onChange, min = 1, max = 8, step = 1 }) {
 
 function ToggleSwitch({ value, onChange, onLabel = "On", offLabel = "Off" }) {
   return (
-    <div style={styles.toggleGroup}>
-      <button
-        onClick={() => onChange(false)}
-        style={{ ...styles.toggleBtn, ...(!value ? styles.toggleBtnActive : {}) }}
-      >
-        {offLabel}
-      </button>
-      <button
-        onClick={() => onChange(true)}
-        style={{ ...styles.toggleBtn, ...(value ? styles.toggleBtnActive : {}) }}
-      >
-        {onLabel}
-      </button>
-    </div>
+    <button
+      role="switch"
+      aria-checked={value}
+      title={value ? onLabel : offLabel}
+      onClick={() => onChange(!value)}
+      style={{ ...styles.switchTrack, background: value ? TOKENS.accent : "#fff" }}
+    >
+      <span style={{ ...styles.switchKnob, left: value ? 22 : 2, background: value ? "#fff" : TOKENS.inkSoft }} />
+    </button>
   );
 }
 
@@ -1797,6 +1792,8 @@ export default function WorshipSlideLibrary() {
         * { box-sizing: border-box; }
         input::placeholder, textarea::placeholder { color: ${TOKENS.inkSoft}; opacity: 0.55; }
         input:focus, textarea:focus { outline: none; border-color: ${TOKENS.accentSoft}; }
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         button { cursor: pointer; font-family: 'Inter', sans-serif; }
         button:disabled { cursor: not-allowed; }
         .spin { animation: spin 0.8s linear infinite; }
@@ -2383,6 +2380,25 @@ const styles = {
     background: TOKENS.accent,
     color: "#fff",
   },
+  switchTrack: {
+    position: "relative",
+    width: 44,
+    height: 24,
+    borderRadius: 12,
+    border: `1px solid ${TOKENS.rule}`,
+    padding: 0,
+    transition: "background 0.18s ease",
+    flexShrink: 0,
+  },
+  switchKnob: {
+    position: "absolute",
+    top: 1,
+    width: 18,
+    height: 18,
+    borderRadius: "50%",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+    transition: "left 0.18s ease, background 0.18s ease",
+  },
   select: {
     padding: "6px 10px",
     fontSize: 12.5,
@@ -2392,6 +2408,7 @@ const styles = {
     borderRadius: 7,
     color: TOKENS.ink,
     height: 28,
+    width: 168,
   },
   stepper: {
     display: "flex",
@@ -2411,7 +2428,7 @@ const styles = {
     lineHeight: 1,
   },
   stepperInput: {
-    width: 34,
+    width: 38,
     height: 28,
     textAlign: "center",
     border: "none",
