@@ -1606,6 +1606,8 @@ function PasswordGate({ onUnlock }) {
         <h1 style={styles.gateTitle}>build your set</h1>
         <p style={styles.gateSubtitle}>
           for the last minute scramble. put together your setlist and presentation in seconds.
+          <br />
+          <small>note: when importing a new song, make sure the chords are numbers!</small>
         </p>
         <form onSubmit={handleSubmit} style={styles.gateForm}>
           <input
@@ -1932,6 +1934,8 @@ export default function WorshipSlideLibrary() {
         <h1 style={styles.appTitle}>build your set</h1>
         <p style={styles.appSubtitle}>
           for the last minute scramble. put together your setlist and presentation in seconds.
+          <br />
+          <small>note: when importing a new song, make sure the chords are numbers!</small>
         </p>
       </div>
 
