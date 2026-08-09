@@ -47,6 +47,9 @@ function isChordyToken(t) {
   if (/^n\.?\s*c\.?$/i.test(t)) return true; // "No Chord"
   if (t === "%" || t === "/" || t === "-" || t === "--") return true; // rhythm/slash notation
   if (/^\(.+\)$/.test(t)) return isChordyToken(t.slice(1, -1)); // (1/3), (4), (2m7) chord alternates
+  // A slash-bass fragment on its own, e.g. "/1" or "/G" — PDF extraction
+  // sometimes splits "4/1" into separate "4" and "/1" tokens.
+  if (/^\/(?:#|b)?[A-G1-7](?:#|b)?\d*$/i.test(t)) return true;
   return CHORD_TOKEN.test(t) || NASHVILLE_TOKEN.test(t);
 }
 
