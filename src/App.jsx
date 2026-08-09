@@ -32,7 +32,7 @@ const NASHVILLE_TOKEN = new RegExp(`^[1-7](?:${QUALITY}|\\d{1,2})*(?:/(?:#|b)?[1
 // Trailing "\d*[a-z]?" also matches sub-labeled sections like "Verse1B" or
 // "Chorus 2a" — the number/letter is only ever a variant/take marker, not
 // something worth keeping on the slide, so it's dropped in the label below.
-const SECTION_WORDS = /^(verse|chorus|pre-chorus|prechorus|bridge|intro|outro|tag|interlude|ending|refrain|instrumental)\s*\d*[a-z]?\s*:?\s*$/i;
+const SECTION_WORDS = /^(verse|chorus|pre-chorus|prechorus|bridge|intro|outro|tag|interlude|ending|refrain|instrumental|instr)\s*\d*[a-z]?\s*:?\s*$/i;
 
 // Non-lyric notation that shows up as its own line — repeat/performance directions,
 // not something to ever show on a slide.
@@ -111,6 +111,11 @@ function parseChordSheet(text) {
 
   for (let raw of lines) {
     raw = raw.replace(DIRECTIVE_INLINE_RE, "");
+    // Chord sheets use a leading *, **, *** etc. to mark alternate/repeat
+    // takes of a section — strip it so it doesn't show up as literal text,
+    // and so a line that's otherwise just chords (e.g. "* | 5 | 4 |") still
+    // gets correctly classified as a chord line below instead of a lyric.
+    raw = raw.replace(/^\s*\*+\s*/, "");
     const trimmed = raw.trim();
     const bracketMatch = trimmed.match(/^\[([^\]]+)\]$/);
     let headerText = null;
@@ -2118,6 +2123,7 @@ const styles = {
   songList: {
     overflowY: "auto",
     flex: 1,
+    maxHeight: 440,
     paddingBottom: 12,
   },
   songItem: {
