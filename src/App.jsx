@@ -13,6 +13,9 @@ import {
   Upload,
   Download,
   Users,
+  ArrowUp,
+  ArrowDown,
+  FileText,
 } from "lucide-react";
 
 // ---------- Chord-sheet parsing ----------
@@ -363,11 +366,7 @@ const PPTX_BG = "0D0B09";
 const PPTX_TEXT = "FAF6EE";
 const PPTX_MUTED = "8C8478";
 
-async function downloadSongAsPptx(song) {
-  const PptxGenJS = await loadPptxGenJs();
-  const pres = new PptxGenJS();
-  pres.layout = "LAYOUT_WIDE";
-
+function addSongToPresentation(pres, song) {
   const fontOpt = FONT_OPTIONS.find((f) => f.value === song.fontFamily) || FONT_OPTIONS[0];
   const FONT = fontOpt.pptxName;
   const slides = buildSlides(song);
@@ -413,9 +412,92 @@ async function downloadSongAsPptx(song) {
       margin: 0,
     });
   });
+}
 
-  const safeName = (song.title || "song").replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") || "song";
-  await pres.writeFile({ fileName: `${safeName}.pptx` });
+function safeFileName(name, fallback) {
+  return name.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") || fallback;
+}
+
+async function downloadSongAsPptx(song) {
+  const PptxGenJS = await loadPptxGenJs();
+  const pres = new PptxGenJS();
+  pres.layout = "LAYOUT_WIDE";
+  addSongToPresentation(pres, song);
+  await pres.writeFile({ fileName: `${safeFileName(song.title || "song", "song")}.pptx` });
+}
+
+async function downloadSetlistAsPptx(setlist, songs) {
+  const PptxGenJS = await loadPptxGenJs();
+  const pres = new PptxGenJS();
+  pres.layout = "LAYOUT_WIDE";
+  songs.forEach((song) => addSongToPresentation(pres, song));
+  await pres.writeFile({ fileName: `${safeFileName(setlist.name || "setlist", "setlist")}.pptx` });
+}
+
+// ---------- Chord sheet PDF export (via jsPDF, CDN-loaded) ----------
+
+function loadJsPdf() {
+  if (window.__jspdfLoadPromise) return window.__jspdfLoadPromise;
+  window.__jspdfLoadPromise = new Promise((resolve, reject) => {
+    if (window.jspdf) {
+      resolve(window.jspdf);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+    script.onload = () => resolve(window.jspdf);
+    script.onerror = () => reject(new Error("Couldn't load the PDF export library."));
+    document.head.appendChild(script);
+  });
+  return window.__jspdfLoadPromise;
+}
+
+async function downloadSetlistChordSheetsAsPdf(setlist, songs) {
+  const { jsPDF } = await loadJsPdf();
+  const doc = new jsPDF({ unit: "pt", format: "letter" });
+  const margin = 54;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const maxWidth = pageWidth - margin * 2;
+  const lineHeight = 13;
+
+  songs.forEach((song, i) => {
+    if (i > 0) doc.addPage();
+    let y = margin;
+
+    doc.setFont("courier", "bold");
+    doc.setFontSize(16);
+    doc.text(song.title || "Untitled", margin, y);
+    y += 20;
+
+    if (song.artist) {
+      doc.setFont("courier", "normal");
+      doc.setFontSize(11);
+      doc.setTextColor(110, 110, 110);
+      doc.text(song.artist, margin, y);
+      doc.setTextColor(0, 0, 0);
+      y += 22;
+    } else {
+      y += 10;
+    }
+
+    doc.setFont("courier", "normal");
+    doc.setFontSize(10.5);
+    const rawLines = (song.rawText || "").replace(/\r/g, "").split("\n");
+    for (const line of rawLines) {
+      const wrapped = doc.splitTextToSize(line.length ? line : " ", maxWidth);
+      for (const w of wrapped) {
+        if (y > pageHeight - margin) {
+          doc.addPage();
+          y = margin;
+        }
+        doc.text(w, margin, y);
+        y += lineHeight;
+      }
+    }
+  });
+
+  doc.save(`${safeFileName(setlist.name || "setlist", "setlist")}-chord-sheets.pdf`);
 }
 
 // ---------- Storage helpers ----------
@@ -444,6 +526,32 @@ async function saveSongToStorage(song) {
 
 async function deleteSongFromStorage(id) {
   await window.storage.delete(`songs:${id}`, true);
+}
+
+// A setlist is just { id, name, songIds } — an ordered list of song ids,
+// resolved against the song library at render/export time.
+async function listSetlists() {
+  const idx = await window.storage.list("setlists:", true);
+  if (!idx || !idx.keys || idx.keys.length === 0) return [];
+  const out = [];
+  for (const raw of idx.values) {
+    if (!raw) continue;
+    try {
+      out.push(JSON.parse(raw));
+    } catch (e) {
+      // skip unreadable entry
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+async function saveSetlistToStorage(setlist) {
+  await window.storage.set(`setlists:${setlist.id}`, JSON.stringify(setlist), true);
+}
+
+async function deleteSetlistFromStorage(id) {
+  await window.storage.delete(`setlists:${id}`, true);
 }
 
 // ---------- UI ----------
@@ -865,6 +973,215 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
   );
 }
 
+function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, saving, confirmingDelete }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [songIds, setSongIds] = useState(initial?.songIds || []);
+  const [query, setQuery] = useState("");
+  const [downloadingPptx, setDownloadingPptx] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [downloadError, setDownloadError] = useState(null);
+
+  const songById = useMemo(() => {
+    const m = new Map();
+    allSongs.forEach((s) => m.set(s.id, s));
+    return m;
+  }, [allSongs]);
+
+  const orderedSongs = songIds.map((id) => songById.get(id)).filter(Boolean);
+
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return allSongs
+      .filter((s) => !songIds.includes(s.id))
+      .filter((s) => s.title.toLowerCase().includes(q) || (s.artist || "").toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [query, allSongs, songIds]);
+
+  const addSong = (id) => {
+    setSongIds((prev) => [...prev, id]);
+    setQuery("");
+  };
+  const removeSong = (id) => setSongIds((prev) => prev.filter((x) => x !== id));
+  const moveSong = (index, dir) => {
+    setSongIds((prev) => {
+      const next = [...prev];
+      const j = index + dir;
+      if (j < 0 || j >= next.length) return prev;
+      [next[index], next[j]] = [next[j], next[index]];
+      return next;
+    });
+  };
+
+  const canSave = name.trim().length > 0 && songIds.length > 0;
+
+  const handleDownloadPptx = async () => {
+    setDownloadingPptx(true);
+    setDownloadError(null);
+    try {
+      await downloadSetlistAsPptx({ name: name.trim() || "setlist" }, orderedSongs);
+    } catch (e) {
+      setDownloadError("Couldn't build the PowerPoint file. Try again.");
+    } finally {
+      setDownloadingPptx(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setDownloadingPdf(true);
+    setDownloadError(null);
+    try {
+      await downloadSetlistChordSheetsAsPdf({ name: name.trim() || "setlist" }, orderedSongs);
+    } catch (e) {
+      setDownloadError("Couldn't build the chord sheet PDF. Try again.");
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 720 }}>
+      <div>
+        <label style={styles.label}>Setlist name</label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Sunday service — Aug 9"
+          style={styles.input}
+        />
+      </div>
+
+      <div>
+        <label style={styles.label}>Add songs</label>
+        <div style={styles.searchWrap}>
+          <Search size={14} color={TOKENS.inkSoft} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search title or artist"
+            style={styles.searchInput}
+          />
+        </div>
+        {results.length > 0 && (
+          <div style={styles.setlistResults}>
+            {results.map((s, i) => (
+              <button
+                key={s.id}
+                onClick={() => addSong(s.id)}
+                style={{
+                  ...styles.setlistResultItem,
+                  ...(i < results.length - 1 ? { borderBottom: `1px solid ${TOKENS.rule}` } : {}),
+                }}
+              >
+                <div>
+                  <div style={styles.songItemTitle}>{s.title}</div>
+                  {s.artist && <div style={styles.songItemArtist}>{s.artist}</div>}
+                </div>
+                <Plus size={14} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <label style={styles.label}>
+          Order ({orderedSongs.length} song{orderedSongs.length === 1 ? "" : "s"})
+        </label>
+        {orderedSongs.length === 0 && (
+          <p style={{ fontFamily: "Inter", fontSize: 12.5, color: TOKENS.inkSoft }}>
+            Search above and add songs to build the order.
+          </p>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {orderedSongs.map((s, i) => (
+            <div key={s.id} style={styles.setlistRow}>
+              <span style={styles.setlistRowIndex}>{i + 1}</span>
+              <div style={{ flex: 1 }}>
+                <div style={styles.songItemTitle}>{s.title}</div>
+                {s.artist && <div style={styles.songItemArtist}>{s.artist}</div>}
+              </div>
+              <button
+                onClick={() => moveSong(i, -1)}
+                disabled={i === 0}
+                style={{ ...styles.iconBtn, opacity: i === 0 ? 0.4 : 1 }}
+                title="Move up"
+              >
+                <ArrowUp size={13} />
+              </button>
+              <button
+                onClick={() => moveSong(i, 1)}
+                disabled={i === orderedSongs.length - 1}
+                style={{ ...styles.iconBtn, opacity: i === orderedSongs.length - 1 ? 0.4 : 1 }}
+                title="Move down"
+              >
+                <ArrowDown size={13} />
+              </button>
+              <button onClick={() => removeSong(s.id)} style={styles.iconBtn} title="Remove">
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {downloadError && <div style={{ ...styles.errorBanner, marginBottom: 0 }}>{downloadError}</div>}
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button
+          disabled={!canSave || saving}
+          onClick={() => onSave({ name: name.trim(), songIds })}
+          style={{ ...styles.primaryBtn, opacity: canSave && !saving ? 1 : 0.5 }}
+        >
+          {saving ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
+          {saving ? "Saving…" : "Save setlist"}
+        </button>
+        <button onClick={onCancel} style={styles.ghostBtn}>
+          Cancel
+        </button>
+        {initial && (
+          <button
+            onClick={onDelete}
+            style={{
+              ...styles.ghostBtn,
+              ...(confirmingDelete ? { borderColor: TOKENS.danger, color: TOKENS.danger } : {}),
+            }}
+          >
+            {confirmingDelete ? "Click again to delete" : "Delete setlist"}
+          </button>
+        )}
+      </div>
+
+      {orderedSongs.length > 0 && (
+        <div style={{ borderTop: `1px solid ${TOKENS.rule}`, paddingTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            onClick={handleDownloadPptx}
+            disabled={downloadingPptx}
+            style={{ ...styles.primaryBtnSmall, opacity: downloadingPptx ? 0.6 : 1 }}
+          >
+            {downloadingPptx ? <Loader2 size={13} className="spin" /> : <Download size={13} />}
+            {downloadingPptx ? "Building…" : "Download combined .pptx"}
+          </button>
+          <button
+            onClick={handleDownloadPdf}
+            disabled={downloadingPdf}
+            style={{ ...styles.ghostBtnSmall, opacity: downloadingPdf ? 0.6 : 1 }}
+          >
+            {downloadingPdf ? <Loader2 size={13} className="spin" /> : <FileText size={13} />}
+            {downloadingPdf ? "Building…" : "Download chord sheets .pdf"}
+          </button>
+        </div>
+      )}
+
+      <p style={{ fontFamily: "Inter", fontSize: 11.5, color: TOKENS.inkSoft, marginTop: 4, lineHeight: 1.6 }}>
+        The combined .pptx has each song's title and lyric slides back to back, in this order —
+        load it once for the whole service. The chord sheet PDF has one song's original
+        chords-and-lyrics per page, for the band to read from.
+      </p>
+    </div>
+  );
+}
+
 export default function WorshipSlideLibrary() {
   const [songs, setSongs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -880,6 +1197,14 @@ export default function WorshipSlideLibrary() {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState(null);
   const fileInputRef = useRef(null);
+
+  const [view, setView] = useState("library"); // 'library' | 'setlists'
+  const [setlists, setSetlists] = useState([]);
+  const [setlistsLoading, setSetlistsLoading] = useState(true);
+  const [selectedSetlistId, setSelectedSetlistId] = useState(null);
+  const [creatingSetlist, setCreatingSetlist] = useState(false);
+  const [savingSetlist, setSavingSetlist] = useState(false);
+  const [confirmDeleteSetlistId, setConfirmDeleteSetlistId] = useState(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -898,6 +1223,22 @@ export default function WorshipSlideLibrary() {
     refresh();
   }, [refresh]);
 
+  const refreshSetlists = useCallback(async () => {
+    setSetlistsLoading(true);
+    try {
+      const list = await listSetlists();
+      setSetlists(list);
+    } catch (e) {
+      setError("Couldn't load your setlists. Try refreshing.");
+    } finally {
+      setSetlistsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshSetlists();
+  }, [refreshSetlists]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return songs;
@@ -907,6 +1248,50 @@ export default function WorshipSlideLibrary() {
   }, [songs, query]);
 
   const selected = songs.find((s) => s.id === selectedId) || null;
+  const selectedSetlist = setlists.find((s) => s.id === selectedSetlistId) || null;
+
+  const startNewSetlist = () => {
+    setSelectedSetlistId(null);
+    setCreatingSetlist(true);
+    setConfirmDeleteSetlistId(null);
+  };
+
+  const closeSetlistBuilder = () => {
+    setSelectedSetlistId(null);
+    setCreatingSetlist(false);
+  };
+
+  const handleSaveSetlist = async (data) => {
+    setSavingSetlist(true);
+    try {
+      const setlist = creatingSetlist
+        ? { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...data }
+        : { ...selectedSetlist, ...data };
+      await saveSetlistToStorage(setlist);
+      await refreshSetlists();
+      setSelectedSetlistId(setlist.id);
+      setCreatingSetlist(false);
+    } catch (e) {
+      setError("Couldn't save that setlist. Try again.");
+    } finally {
+      setSavingSetlist(false);
+    }
+  };
+
+  const handleDeleteSetlist = async (id) => {
+    if (confirmDeleteSetlistId !== id) {
+      setConfirmDeleteSetlistId(id);
+      return;
+    }
+    try {
+      await deleteSetlistFromStorage(id);
+      setConfirmDeleteSetlistId(null);
+      setSelectedSetlistId(null);
+      await refreshSetlists();
+    } catch (e) {
+      setError("Couldn't delete that setlist. Try again.");
+    }
+  };
 
   const startBlankAdd = () => {
     setPendingImport(null);
@@ -1050,21 +1435,39 @@ export default function WorshipSlideLibrary() {
           <div style={styles.sidebarHeader}>
             <div style={styles.brand}>
               <Music4 size={16} color={TOKENS.accent} strokeWidth={2} />
-              <span>Song Library</span>
+              <span>{view === "library" ? "Song Library" : "Setlists"}</span>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button
-                onClick={startImportPdf}
-                style={styles.addBtnGhost}
-                title="Import from PDF"
-                disabled={importing}
-              >
-                {importing ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
-              </button>
-              <button onClick={startBlankAdd} style={styles.addBtn} title="Add song">
-                <Plus size={16} />
-              </button>
+              {view === "library" && (
+                <>
+                  <button
+                    onClick={startImportPdf}
+                    style={styles.addBtnGhost}
+                    title="Import from PDF"
+                    disabled={importing}
+                  >
+                    {importing ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
+                  </button>
+                  <button onClick={startBlankAdd} style={styles.addBtn} title="Add song">
+                    <Plus size={16} />
+                  </button>
+                </>
+              )}
+              {view === "setlists" && (
+                <button onClick={startNewSetlist} style={styles.addBtn} title="New setlist">
+                  <Plus size={16} />
+                </button>
+              )}
             </div>
+          </div>
+
+          <div style={{ margin: "0 16px 12px" }}>
+            <ToggleSwitch
+              value={view === "setlists"}
+              onChange={(v) => setView(v ? "setlists" : "library")}
+              onLabel="Setlists"
+              offLabel="Library"
+            />
           </div>
 
           <div style={styles.sharedBadge}>
@@ -1072,114 +1475,187 @@ export default function WorshipSlideLibrary() {
             <span>Shared library — visible to everyone with this link</span>
           </div>
 
-          <div style={styles.searchWrap}>
-            <Search size={14} color={TOKENS.inkSoft} />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search title or artist"
-              style={styles.searchInput}
-            />
-          </div>
+          {view === "library" && (
+            <>
+              <div style={styles.searchWrap}>
+                <Search size={14} color={TOKENS.inkSoft} />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search title or artist"
+                  style={styles.searchInput}
+                />
+              </div>
 
-          <div style={styles.songList}>
-            {loading && (
-              <div style={{ padding: 20, display: "flex", justifyContent: "center" }}>
-                <Loader2 size={18} className="spin" color={TOKENS.inkSoft} />
+              <div style={styles.songList}>
+                {loading && (
+                  <div style={{ padding: 20, display: "flex", justifyContent: "center" }}>
+                    <Loader2 size={18} className="spin" color={TOKENS.inkSoft} />
+                  </div>
+                )}
+                {!loading && filtered.length === 0 && songs.length === 0 && (
+                  <EmptyLibrary onAdd={startBlankAdd} onImport={startImportPdf} />
+                )}
+                {!loading && filtered.length === 0 && songs.length > 0 && (
+                  <div style={{ padding: 20, fontFamily: "Inter", fontSize: 12.5, color: TOKENS.inkSoft }}>
+                    No matches for "{query}"
+                  </div>
+                )}
+                {!loading &&
+                  filtered.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => {
+                        setSelectedId(s.id);
+                        setMode("preview");
+                        setConfirmDeleteId(null);
+                      }}
+                      style={{
+                        ...styles.songItem,
+                        ...(s.id === selectedId ? styles.songItemActive : {}),
+                      }}
+                    >
+                      <div style={styles.songItemTitle}>{s.title}</div>
+                      {s.artist && <div style={styles.songItemArtist}>{s.artist}</div>}
+                    </button>
+                  ))}
               </div>
-            )}
-            {!loading && filtered.length === 0 && songs.length === 0 && (
-              <EmptyLibrary onAdd={startBlankAdd} onImport={startImportPdf} />
-            )}
-            {!loading && filtered.length === 0 && songs.length > 0 && (
-              <div style={{ padding: 20, fontFamily: "Inter", fontSize: 12.5, color: TOKENS.inkSoft }}>
-                No matches for "{query}"
-              </div>
-            )}
-            {!loading &&
-              filtered.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => {
-                    setSelectedId(s.id);
-                    setMode("preview");
-                    setConfirmDeleteId(null);
-                  }}
-                  style={{
-                    ...styles.songItem,
-                    ...(s.id === selectedId ? styles.songItemActive : {}),
-                  }}
-                >
-                  <div style={styles.songItemTitle}>{s.title}</div>
-                  {s.artist && <div style={styles.songItemArtist}>{s.artist}</div>}
-                </button>
-              ))}
-          </div>
+            </>
+          )}
+
+          {view === "setlists" && (
+            <div style={styles.songList}>
+              {setlistsLoading && (
+                <div style={{ padding: 20, display: "flex", justifyContent: "center" }}>
+                  <Loader2 size={18} className="spin" color={TOKENS.inkSoft} />
+                </div>
+              )}
+              {!setlistsLoading && setlists.length === 0 && (
+                <div style={{ padding: 20, fontFamily: "Inter", fontSize: 12.5, color: TOKENS.inkSoft, lineHeight: 1.6 }}>
+                  No setlists yet. Create one to build a service order from your library.
+                </div>
+              )}
+              {!setlistsLoading &&
+                setlists.map((sl) => (
+                  <button
+                    key={sl.id}
+                    onClick={() => {
+                      setSelectedSetlistId(sl.id);
+                      setCreatingSetlist(false);
+                      setConfirmDeleteSetlistId(null);
+                    }}
+                    style={{
+                      ...styles.songItem,
+                      ...(sl.id === selectedSetlistId && !creatingSetlist ? styles.songItemActive : {}),
+                    }}
+                  >
+                    <div style={styles.songItemTitle}>{sl.name}</div>
+                    <div style={styles.songItemArtist}>
+                      {sl.songIds.length} song{sl.songIds.length === 1 ? "" : "s"}
+                    </div>
+                  </button>
+                ))}
+            </div>
+          )}
         </div>
 
         <div style={styles.main}>
           {error && <div style={styles.errorBanner}>{error}</div>}
-          {importError && (
-            <div style={styles.errorBanner}>
-              {importError}
-              <button
-                onClick={() => setImportError(null)}
-                style={{ float: "right", background: "none", border: "none", color: TOKENS.danger }}
-              >
-                <X size={13} />
-              </button>
-            </div>
-          )}
-          {importing && (
-            <div style={styles.infoBanner}>
-              <Loader2 size={13} className="spin" style={{ verticalAlign: "-2px", marginRight: 6 }} />
-              Reading PDF and reconstructing the lyric lines…
-            </div>
+
+          {view === "library" && (
+            <>
+              {importError && (
+                <div style={styles.errorBanner}>
+                  {importError}
+                  <button
+                    onClick={() => setImportError(null)}
+                    style={{ float: "right", background: "none", border: "none", color: TOKENS.danger }}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              )}
+              {importing && (
+                <div style={styles.infoBanner}>
+                  <Loader2 size={13} className="spin" style={{ verticalAlign: "-2px", marginRight: 6 }} />
+                  Reading PDF and reconstructing the lyric lines…
+                </div>
+              )}
+
+              {mode === "add" && (
+                <>
+                  <BackRow onBack={() => setMode("preview")} label={pendingImport ? "Review import" : "New song"} />
+                  <SongForm
+                    key={`add-${formKey}`}
+                    initial={pendingImport}
+                    onCancel={() => {
+                      setPendingImport(null);
+                      setMode("preview");
+                    }}
+                    onSave={handleSaveNew}
+                    saving={saving}
+                  />
+                </>
+              )}
+
+              {mode === "edit" && selected && (
+                <>
+                  <BackRow onBack={() => setMode("preview")} label={`Editing "${selected.title}"`} />
+                  <SongForm
+                    key={`edit-${selected.id}`}
+                    initial={selected}
+                    onCancel={() => setMode("preview")}
+                    onSave={handleSaveEdit}
+                    saving={saving}
+                  />
+                </>
+              )}
+
+              {mode === "preview" && selected && (
+                <SongPreview
+                  song={selected}
+                  onEdit={() => setMode("edit")}
+                  onDelete={() => handleDelete(selected.id)}
+                  onUpdateSettings={handleUpdateSongSettings}
+                  confirmingDelete={confirmDeleteId === selected.id}
+                />
+              )}
+
+              {mode === "preview" && !selected && !loading && songs.length > 0 && (
+                <div style={{ padding: "64px 24px", textAlign: "center" }}>
+                  <p style={{ fontFamily: "Inter", fontSize: 13, color: TOKENS.inkSoft }}>
+                    Select a song from the library, add a new one, or import a PDF.
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
-          {mode === "add" && (
+          {view === "setlists" && (creatingSetlist || selectedSetlist) && (
             <>
-              <BackRow onBack={() => setMode("preview")} label={pendingImport ? "Review import" : "New song"} />
-              <SongForm
-                key={`add-${formKey}`}
-                initial={pendingImport}
-                onCancel={() => {
-                  setPendingImport(null);
-                  setMode("preview");
-                }}
-                onSave={handleSaveNew}
-                saving={saving}
+              <BackRow
+                onBack={closeSetlistBuilder}
+                label={creatingSetlist ? "New setlist" : `Editing "${selectedSetlist.name}"`}
+              />
+              <SetlistBuilder
+                key={creatingSetlist ? "new-setlist" : selectedSetlist.id}
+                initial={creatingSetlist ? null : selectedSetlist}
+                allSongs={songs}
+                onCancel={closeSetlistBuilder}
+                onSave={handleSaveSetlist}
+                onDelete={() => handleDeleteSetlist(selectedSetlist.id)}
+                saving={savingSetlist}
+                confirmingDelete={confirmDeleteSetlistId === selectedSetlistId}
               />
             </>
           )}
 
-          {mode === "edit" && selected && (
-            <>
-              <BackRow onBack={() => setMode("preview")} label={`Editing "${selected.title}"`} />
-              <SongForm
-                key={`edit-${selected.id}`}
-                initial={selected}
-                onCancel={() => setMode("preview")}
-                onSave={handleSaveEdit}
-                saving={saving}
-              />
-            </>
-          )}
-
-          {mode === "preview" && selected && (
-            <SongPreview
-              song={selected}
-              onEdit={() => setMode("edit")}
-              onDelete={() => handleDelete(selected.id)}
-              onUpdateSettings={handleUpdateSongSettings}
-              confirmingDelete={confirmDeleteId === selected.id}
-            />
-          )}
-
-          {mode === "preview" && !selected && !loading && songs.length > 0 && (
+          {view === "setlists" && !creatingSetlist && !selectedSetlist && !setlistsLoading && (
             <div style={{ padding: "64px 24px", textAlign: "center" }}>
               <p style={{ fontFamily: "Inter", fontSize: 13, color: TOKENS.inkSoft }}>
-                Select a song from the library, add a new one, or import a PDF.
+                {setlists.length > 0
+                  ? "Select a setlist or create a new one."
+                  : "Create your first setlist to build a service order from your library."}
               </p>
             </div>
           )}
@@ -1317,6 +1793,41 @@ const styles = {
     fontSize: 11,
     color: TOKENS.inkSoft,
     marginTop: 1,
+  },
+  setlistResults: {
+    marginTop: 8,
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 8,
+    overflow: "hidden",
+    background: "#fff",
+  },
+  setlistResultItem: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    textAlign: "left",
+    padding: "8px 12px",
+    background: "transparent",
+    border: "none",
+    color: TOKENS.accent,
+  },
+  setlistRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "8px 10px",
+    background: "#fff",
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 8,
+  },
+  setlistRowIndex: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: TOKENS.inkSoft,
+    width: 18,
+    textAlign: "center",
+    flexShrink: 0,
   },
   main: {
     padding: "28px 32px",
