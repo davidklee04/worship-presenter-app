@@ -1910,6 +1910,8 @@ export default function WorshipSlideLibrary() {
         button:disabled { cursor: not-allowed; }
         .spin { animation: spin 0.8s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .view-fade { animation: viewFadeIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        @keyframes viewFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
         @media (max-width: 720px) {
           .wsl-shell { grid-template-columns: 1fr !important; }
           .wsl-sidebar { border-right: none !important; border-bottom: 1px solid ${TOKENS.rule}; }
@@ -1985,6 +1987,7 @@ export default function WorshipSlideLibrary() {
             <span>Shared library — visible to everyone with this link</span>
           </div>
 
+          <div key={view} className="view-fade" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
           {view === "library" && (
             <>
               <div style={styles.searchWrap}>
@@ -2085,11 +2088,13 @@ export default function WorshipSlideLibrary() {
                 ))}
             </div>
           )}
+          </div>
         </div>
 
         <div style={styles.main}>
           {error && <div style={styles.errorBanner}>{error}</div>}
 
+          <div key={view} className="view-fade">
           {view === "library" && (
             <>
               {importError && (
@@ -2191,6 +2196,7 @@ export default function WorshipSlideLibrary() {
           )}
 
           {view === "history" && <HistoryView songs={songs} setlists={setlists} />}
+          </div>
         </div>
       </div>
     </div>
@@ -2585,7 +2591,7 @@ const styles = {
     borderRadius: 12,
     border: `1px solid ${TOKENS.rule}`,
     padding: 0,
-    transition: "background 0.18s ease",
+    transition: "background 0.38s ease",
     flexShrink: 0,
   },
   switchKnob: {
@@ -2595,7 +2601,7 @@ const styles = {
     height: 18,
     borderRadius: "50%",
     boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
-    transition: "left 0.18s ease, background 0.18s ease",
+    transition: "left 0.38s cubic-bezier(0.34, 1.2, 0.4, 1), background 0.38s ease",
   },
   select: {
     padding: "6px 10px",
