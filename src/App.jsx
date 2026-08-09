@@ -27,7 +27,10 @@ const CHORD_TOKEN = new RegExp(`^[A-G](?:#|b)?(?:${QUALITY}|\\d{1,2})*(?:/(?:#|b
 // Nashville number system — same extended/altered coverage: 1, 5/4, 2m7, 1maj7/5, 3sus/7, 5m/b7, ...
 const NASHVILLE_TOKEN = new RegExp(`^[1-7](?:${QUALITY}|\\d{1,2})*(?:/(?:#|b)?[1-7](?:#|b)?\\d*)?$`, "i");
 
-const SECTION_WORDS = /^(verse|chorus|pre-chorus|prechorus|bridge|intro|outro|tag|interlude|ending|refrain|instrumental)\s*\d*\s*:?\s*$/i;
+// Trailing "\d*[a-z]?" also matches sub-labeled sections like "Verse1B" or
+// "Chorus 2a" — the number/letter is only ever a variant/take marker, not
+// something worth keeping on the slide, so it's dropped in the label below.
+const SECTION_WORDS = /^(verse|chorus|pre-chorus|prechorus|bridge|intro|outro|tag|interlude|ending|refrain|instrumental)\s*\d*[a-z]?\s*:?\s*$/i;
 
 // Non-lyric notation that shows up as its own line — repeat/performance directions,
 // not something to ever show on a slide.
@@ -83,9 +86,9 @@ function parseChordSheet(text) {
     let headerText = null;
 
     if (bracketMatch && SECTION_WORDS.test(bracketMatch[1])) {
-      headerText = bracketMatch[1];
+      headerText = bracketMatch[1].match(SECTION_WORDS)[1];
     } else if (SECTION_WORDS.test(trimmed)) {
-      headerText = trimmed.replace(/:$/, "");
+      headerText = trimmed.match(SECTION_WORDS)[1];
     }
 
     if (headerText) {
