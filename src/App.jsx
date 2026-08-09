@@ -18,6 +18,7 @@ import {
   FileText,
   ChevronDown,
   ChevronUp,
+  GripVertical,
 } from "lucide-react";
 
 // ---------- Chord-sheet parsing ----------
@@ -1159,6 +1160,8 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
   const [expandedSongId, setExpandedSongId] = useState(null);
   const [editingSongId, setEditingSongId] = useState(null);
   const [savingSongId, setSavingSongId] = useState(null);
+  const [draggedIndex, setDraggedIndex] = useState(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
 
   const [useUniformFormat, setUseUniformFormat] = useState(!!initial?.format);
   const [formatFontFamily, setFormatFontFamily] = useState(initial?.format?.fontFamily || DEFAULT_FONT_FAMILY);
@@ -1197,6 +1200,15 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
       const j = index + dir;
       if (j < 0 || j >= next.length) return prev;
       [next[index], next[j]] = [next[j], next[index]];
+      return next;
+    });
+  };
+  const moveSongTo = (fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return;
+    setSongIds((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
       return next;
     });
   };
@@ -1308,8 +1320,39 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {orderedSongs.map((s, i) => (
-            <div key={s.id}>
-              <div style={styles.setlistRow}>
+            <div
+              key={s.id}
+              draggable
+              onDragStart={(e) => {
+                setDraggedIndex(i);
+                e.dataTransfer.effectAllowed = "move";
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (draggedIndex === null || draggedIndex === i) return;
+                setDragOverIndex(i);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (draggedIndex !== null && draggedIndex !== i) moveSongTo(draggedIndex, i);
+                setDraggedIndex(null);
+                setDragOverIndex(null);
+              }}
+              onDragEnd={() => {
+                setDraggedIndex(null);
+                setDragOverIndex(null);
+              }}
+              style={{ opacity: draggedIndex === i ? 0.4 : 1 }}
+            >
+              <div
+                style={{
+                  ...styles.setlistRow,
+                  ...(dragOverIndex === i && draggedIndex !== i ? styles.setlistRowDragOver : {}),
+                }}
+              >
+                <span style={styles.setlistDragHandle} title="Drag to reorder">
+                  <GripVertical size={14} />
+                </span>
                 <span style={styles.setlistRowIndex}>{i + 1}</span>
                 <button
                   onClick={() => toggleExpanded(s.id)}
@@ -2436,6 +2479,18 @@ const styles = {
     background: "#fff",
     border: `1px solid ${TOKENS.rule}`,
     borderRadius: 8,
+    transition: "border-color 0.15s ease, background 0.15s ease",
+  },
+  setlistRowDragOver: {
+    borderColor: TOKENS.accent,
+    background: TOKENS.infoBg,
+  },
+  setlistDragHandle: {
+    display: "flex",
+    alignItems: "center",
+    color: TOKENS.inkSoft,
+    cursor: "grab",
+    flexShrink: 0,
   },
   setlistRowIndex: {
     fontFamily: "'JetBrains Mono', monospace",
