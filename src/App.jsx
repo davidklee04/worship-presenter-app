@@ -1812,6 +1812,13 @@ export default function WorshipSlideLibrary() {
         onChange={handleFileChange}
       />
 
+      <div style={styles.appHeader}>
+        <h1 style={styles.appTitle}>Build Your Worship</h1>
+        <p style={styles.appSubtitle}>
+          for the last minute rush. quickly build your setlists and presentations for service.
+        </p>
+      </div>
+
       <div className="wsl-shell" style={styles.shell}>
         <div className="wsl-sidebar" style={styles.sidebar}>
           <div style={styles.sidebarHeader}>
@@ -2094,6 +2101,26 @@ const styles = {
     borderRadius: 14,
     border: `1px solid ${TOKENS.rule}`,
     overflow: "hidden",
+  },
+  appHeader: {
+    padding: "20px 24px 16px",
+    borderBottom: `1px solid ${TOKENS.rule}`,
+    background: TOKENS.paperDeep,
+  },
+  appTitle: {
+    fontFamily: "'Fraunces', serif",
+    fontWeight: 700,
+    fontSize: 22,
+    letterSpacing: "-0.01em",
+    color: TOKENS.ink,
+    margin: 0,
+  },
+  appSubtitle: {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 13,
+    color: TOKENS.inkSoft,
+    margin: "4px 0 0",
+    lineHeight: 1.5,
   },
   shell: {
     display: "grid",
