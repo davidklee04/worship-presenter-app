@@ -196,6 +196,18 @@ function exportText(song) {
   return song.allCaps ? text.toUpperCase() : text;
 }
 
+// Rebuilds a plain lyric sheet (section labels + clean lyric lines only,
+// chords/directives/asterisks/etc already stripped by parseChordSheet) so
+// the editor shows exactly what the slides show, not the raw pasted-in
+// chord sheet. Blank lines inside a section (used to force a slide break)
+// are preserved as real blank lines.
+function toLyricSheetText(rawText) {
+  const sections = parseChordSheet(rawText || "");
+  return sections
+    .map((s) => `${s.label}\n${s.lines.map((l) => (l === null ? "" : l)).join("\n")}`)
+    .join("\n\n");
+}
+
 // ---------- Shared CDN script loader ----------
 // Caches the in-flight/loaded promise on window so repeat calls don't
 // re-inject the script — but a failed load clears its own cache entry, so
@@ -737,7 +749,7 @@ function EmptyLibrary({ onAdd, onImport }) {
 function SongForm({ initial, onCancel, onSave, saving }) {
   const [title, setTitle] = useState(initial?.title || "");
   const [artist, setArtist] = useState(initial?.artist || "");
-  const [rawText, setRawText] = useState(initial?.rawText || "");
+  const [rawText, setRawText] = useState(() => (initial?.rawText ? toLyricSheetText(initial.rawText) : ""));
   const [linesPerSlide, setLinesPerSlide] = useState(initial?.linesPerSlide || 2);
   const [fontFamily, setFontFamily] = useState(initial?.fontFamily || DEFAULT_FONT_FAMILY);
   const [fontSize, setFontSize] = useState(initial?.fontSize || DEFAULT_FONT_SIZE);
@@ -790,15 +802,15 @@ function SongForm({ initial, onCancel, onSave, saving }) {
 
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <label style={styles.label}>Chord sheet</label>
+          <label style={styles.label}>Lyric sheet</label>
           <span style={{ fontFamily: "Inter", fontSize: 11, color: TOKENS.inkSoft }}>
-            Chords are stripped automatically — paste it as-is
+            Exactly what shows on your slides — chords get stripped automatically if you paste some in
           </span>
         </div>
         <textarea
           value={rawText}
           onChange={(e) => setRawText(e.target.value)}
-          placeholder={"[Verse 1]\nG              D\nAmazing grace, how sweet the sound\n..."}
+          placeholder={"Verse\nAmazing grace, how sweet the sound\n..."}
           style={styles.textarea}
           rows={12}
         />
