@@ -1552,7 +1552,88 @@ function HistoryView({ songs, setlists }) {
   );
 }
 
+// Client-side gate only — a light deterrent so the link isn't wide open,
+// not real security (anyone with devtools can read GATE_PASSWORD). Change
+// it here whenever needed.
+const GATE_PASSWORD = "romans12";
+const GATE_STORAGE_KEY = "worship-slide-library:unlocked";
+
+function PasswordGate({ onUnlock }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(false);
+  const [shake, setShake] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (password === GATE_PASSWORD) {
+      try {
+        localStorage.setItem(GATE_STORAGE_KEY, "true");
+      } catch (err) {
+        // localStorage unavailable — unlock still works for this session
+      }
+      setLeaving(true);
+      setTimeout(onUnlock, 320);
+    } else {
+      setError(true);
+      setShake(true);
+      setTimeout(() => setShake(false), 420);
+    }
+  };
+
+  return (
+    <div style={{ ...styles.gateWrap, opacity: leaving ? 0 : 1 }}>
+      <style>{FONTS}{`
+        * { box-sizing: border-box; }
+        input::placeholder { color: ${TOKENS.inkSoft}; opacity: 0.55; }
+        input:focus { outline: none; border-color: ${TOKENS.accentSoft}; }
+        button { cursor: pointer; font-family: 'Inter', sans-serif; }
+        @keyframes gateIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes gateShake {
+          10%, 90% { transform: translateX(-2px); }
+          20%, 80% { transform: translateX(4px); }
+          30%, 50%, 70% { transform: translateX(-8px); }
+          40%, 60% { transform: translateX(8px); }
+        }
+        .gate-card { animation: gateIn 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        .gate-card.shake { animation: gateShake 0.42s ease; }
+      `}</style>
+      <div className={`gate-card${shake ? " shake" : ""}`} style={styles.gateCard}>
+        <Music4 size={26} color={TOKENS.accent} strokeWidth={2} />
+        <h1 style={styles.gateTitle}>build your set</h1>
+        <p style={styles.gateSubtitle}>
+          for the last minute scramble. put together your setlist and presentation in seconds.
+        </p>
+        <form onSubmit={handleSubmit} style={styles.gateForm}>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setError(false);
+            }}
+            placeholder="Password"
+            style={styles.gateInput}
+            autoFocus
+          />
+          <button type="submit" style={styles.primaryBtn}>
+            Enter
+          </button>
+        </form>
+        {error && <p style={styles.gateError}>Incorrect password — try again.</p>}
+      </div>
+    </div>
+  );
+}
+
 export default function WorshipSlideLibrary() {
+  const [unlocked, setUnlocked] = useState(() => {
+    try {
+      return localStorage.getItem(GATE_STORAGE_KEY) === "true";
+    } catch (e) {
+      return false;
+    }
+  });
   const [songs, setSongs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1814,6 +1895,10 @@ export default function WorshipSlideLibrary() {
     }
   };
 
+  if (!unlocked) {
+    return <PasswordGate onUnlock={() => setUnlocked(true)} />;
+  }
+
   return (
     <div style={styles.app}>
       <style>{FONTS}{`
@@ -1841,7 +1926,7 @@ export default function WorshipSlideLibrary() {
       />
 
       <div style={styles.appHeader}>
-        <h1 style={styles.appTitle}>Build Your Set</h1>
+        <h1 style={styles.appTitle}>build your set</h1>
         <p style={styles.appSubtitle}>
           for the last minute scramble. put together your setlist and presentation in seconds.
         </p>
@@ -2149,6 +2234,63 @@ const styles = {
     color: TOKENS.inkSoft,
     margin: "4px 0 0",
     lineHeight: 1.5,
+  },
+  gateWrap: {
+    fontFamily: "'Inter', sans-serif",
+    minHeight: "600px",
+    borderRadius: 14,
+    border: `1px solid ${TOKENS.rule}`,
+    background: TOKENS.paper,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+    transition: "opacity 0.3s ease",
+  },
+  gateCard: {
+    maxWidth: 380,
+    width: "100%",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    textAlign: "center",
+  },
+  gateTitle: {
+    fontFamily: "'Fraunces', serif",
+    fontWeight: 700,
+    fontSize: 32,
+    color: TOKENS.ink,
+    letterSpacing: "-0.01em",
+    margin: "14px 0 0",
+  },
+  gateSubtitle: {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 13.5,
+    color: TOKENS.inkSoft,
+    lineHeight: 1.6,
+    margin: "8px 0 24px",
+  },
+  gateForm: {
+    display: "flex",
+    gap: 8,
+    width: "100%",
+  },
+  gateInput: {
+    flex: 1,
+    padding: "10px 14px",
+    fontSize: 14,
+    fontFamily: "'Inter', sans-serif",
+    background: "#fff",
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 8,
+    color: TOKENS.ink,
+    minWidth: 0,
+  },
+  gateError: {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 12.5,
+    color: TOKENS.danger,
+    marginTop: 14,
   },
   shell: {
     display: "grid",
