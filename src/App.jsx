@@ -1411,6 +1411,8 @@ export default function WorshipSlideLibrary() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState("title"); // 'title' | 'artist'
+  const [sortDir, setSortDir] = useState("asc"); // 'asc' | 'desc'
   const [selectedId, setSelectedId] = useState(null);
   const [mode, setMode] = useState("preview"); // 'preview' | 'add' | 'edit'
   const [saving, setSaving] = useState(false);
@@ -1466,11 +1468,23 @@ export default function WorshipSlideLibrary() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return songs;
-    return songs.filter(
-      (s) => s.title.toLowerCase().includes(q) || (s.artist || "").toLowerCase().includes(q)
-    );
-  }, [songs, query]);
+    const matches = !q
+      ? songs
+      : songs.filter(
+          (s) =>
+            s.title.toLowerCase().includes(q) ||
+            (s.artist || "").toLowerCase().includes(q) ||
+            (s.rawText || "").toLowerCase().includes(q)
+        );
+
+    const sorted = [...matches].sort((a, b) => {
+      const av = (sortBy === "artist" ? a.artist : a.title) || "";
+      const bv = (sortBy === "artist" ? b.artist : b.title) || "";
+      return av.localeCompare(bv);
+    });
+    if (sortDir === "desc") sorted.reverse();
+    return sorted;
+  }, [songs, query, sortBy, sortDir]);
 
   const selected = songs.find((s) => s.id === selectedId) || null;
   const selectedSetlist = setlists.find((s) => s.id === selectedSetlistId) || null;
@@ -1737,9 +1751,27 @@ export default function WorshipSlideLibrary() {
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search title or artist"
+                  placeholder="Search title, artist, or lyrics"
                   style={styles.searchInput}
                 />
+              </div>
+
+              <div style={{ display: "flex", gap: 6, margin: "0 16px 12px" }}>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  style={{ ...styles.select, flex: 1, width: "100%" }}
+                >
+                  <option value="title">Sort by title</option>
+                  <option value="artist">Sort by artist</option>
+                </select>
+                <button
+                  onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+                  style={styles.iconBtn}
+                  title={sortDir === "asc" ? "A → Z (click for Z → A)" : "Z → A (click for A → Z)"}
+                >
+                  {sortDir === "asc" ? <ArrowDown size={13} /> : <ArrowUp size={13} />}
+                </button>
               </div>
 
               <div style={styles.songList}>
