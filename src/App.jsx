@@ -1166,7 +1166,8 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
   const [dropTargetIndex, setDropTargetIndex] = useState(null);
   const dragStateRef = useRef({ draggedSongId: null, originalIndex: null, dropTargetIndex: null });
   const rowRefs = useRef(new Map()); // songId -> row element
-  const rowStepRef = useRef(57); // row height + gap, measured on drag start
+  const rowStepRef = useRef(57); // row height + gap, measured once on drag start
+  const dragBaseTopRef = useRef(0); // where row index 0 sits, extrapolated from the same measurement
 
   const handleDragPointerDown = (e, songId) => {
     e.preventDefault(); // stop the drag gesture from starting a text selection
@@ -1174,35 +1175,32 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
     const originalIndex = songIds.indexOf(songId);
     const el = rowRefs.current.get(songId);
     if (el) {
+      const rect = el.getBoundingClientRect();
       const nextEl = rowRefs.current.get(songIds[originalIndex + 1]);
-      rowStepRef.current = nextEl
-        ? nextEl.getBoundingClientRect().top - el.getBoundingClientRect().top
-        : el.getBoundingClientRect().height + 6;
+      const step = nextEl ? nextEl.getBoundingClientRect().top - rect.top : rect.height + 6;
+      rowStepRef.current = step;
+      dragBaseTopRef.current = rect.top - originalIndex * step;
     }
     dragStateRef.current = { draggedSongId: songId, originalIndex, dropTargetIndex: originalIndex };
     setDraggedSongId(songId);
     setDropTargetIndex(originalIndex);
   };
 
+  // Deliberately does NOT re-measure row positions via getBoundingClientRect
+  // here — rows are actively mid-CSS-transition from the previous move, so
+  // measuring them mid-flight reads their animating (not settled) position.
+  // That fed back into miscalculating the target index and caused visible
+  // jitter/bounce. Instead, the target slot is pure arithmetic off the one
+  // measurement taken at pointerdown, which is always stable.
   const handleDragPointerMove = (e) => {
     const { draggedSongId: draggingId } = dragStateRef.current;
     if (draggingId == null) return;
-    let closestIndex = null;
-    let closestDist = Infinity;
-    orderedSongs.forEach((s, idx) => {
-      const el = rowRefs.current.get(s.id);
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const mid = rect.top + rect.height / 2;
-      const dist = Math.abs(e.clientY - mid);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestIndex = idx;
-      }
-    });
-    if (closestIndex !== null && closestIndex !== dragStateRef.current.dropTargetIndex) {
-      dragStateRef.current.dropTargetIndex = closestIndex;
-      setDropTargetIndex(closestIndex);
+    const step = rowStepRef.current || 1;
+    let targetIndex = Math.floor((e.clientY - dragBaseTopRef.current) / step);
+    targetIndex = Math.max(0, Math.min(orderedSongs.length - 1, targetIndex));
+    if (targetIndex !== dragStateRef.current.dropTargetIndex) {
+      dragStateRef.current.dropTargetIndex = targetIndex;
+      setDropTargetIndex(targetIndex);
     }
   };
 
