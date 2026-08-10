@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Search,
   Plus,
@@ -1154,93 +1154,81 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
   const [expandedSongId, setExpandedSongId] = useState(null);
   const [editingSongId, setEditingSongId] = useState(null);
   const [savingSongId, setSavingSongId] = useState(null);
+  // Drag reordering, in two parts:
+  //  - While dragging, songIds itself is untouched — rows just get a visual
+  //    translateY to open a gap at the current drop target (row above the
+  //    gap nudges up, row below nudges down), so it reads as "making room"
+  //    rather than the list actually reshuffling underneath you.
+  //  - On drop, the real reorder commits once, and since each row's resting
+  //    position now matches wherever its preview transform already had it,
+  //    the transform simply eases back to 0 — "everything shifts into place."
   const [draggedSongId, setDraggedSongId] = useState(null);
-  const dragStateRef = useRef({ draggedSongId: null });
+  const [dropTargetIndex, setDropTargetIndex] = useState(null);
+  const dragStateRef = useRef({ draggedSongId: null, originalIndex: null, dropTargetIndex: null });
   const rowRefs = useRef(new Map()); // songId -> row element
-  const prevRectsRef = useRef(null); // songId -> DOMRect, captured just before a reorder
+  const rowStepRef = useRef(57); // row height + gap, measured on drag start
 
-  const captureRectsBeforeReorder = () => {
-    // Clear any FLIP transform still animating from a previous reorder
-    // first, so rects reflect true layout position rather than a
-    // mid-transition visual offset. Without this, a fast drag that
-    // triggers several reorders before the 0.22s animation finishes reads
-    // stale positions and only ever advances one row at a time instead of
-    // jumping straight to wherever the pointer actually is.
-    rowRefs.current.forEach((el) => {
-      el.style.transition = "none";
-      el.style.transform = "";
-    });
-    const rects = new Map();
-    rowRefs.current.forEach((el, id) => rects.set(id, el.getBoundingClientRect()));
-    prevRectsRef.current = rects;
-  };
-
-  // FLIP animation: after songIds reorders (and React has already moved the
-  // DOM nodes), slide every OTHER row from its old position to its new one
-  // instead of letting it snap instantly. The row actually being dragged is
-  // skipped so it stays visually "held" while everything else moves around it.
-  useLayoutEffect(() => {
-    if (!prevRectsRef.current) return;
-    const prevRects = prevRectsRef.current;
-    prevRectsRef.current = null;
-    const draggingId = dragStateRef.current.draggedSongId;
-
-    rowRefs.current.forEach((el, id) => {
-      if (id === draggingId) return;
-      const prev = prevRects.get(id);
-      if (!prev) return;
-      const next = el.getBoundingClientRect();
-      const deltaY = prev.top - next.top;
-      if (Math.abs(deltaY) < 0.5) return;
-      el.style.transition = "none";
-      el.style.transform = `translateY(${deltaY}px)`;
-      el.getBoundingClientRect(); // force reflow so the transform above applies before we animate away from it
-      requestAnimationFrame(() => {
-        el.style.transition = "transform 0.22s cubic-bezier(0.2, 0, 0.2, 1)";
-        el.style.transform = "";
-      });
-    });
-  }, [songIds]);
-
-  // Pointer Events (not native HTML5 drag-and-drop) so this works on touch
-  // devices too, not just mouse. The handle captures the pointer on
-  // pointerdown, so move/up events keep firing on it even as the finger/
-  // cursor travels over other rows. Reorders live as you drag (not just on
-  // drop) so the song actually moves in place, not just a static highlight.
   const handleDragPointerDown = (e, songId) => {
     e.preventDefault(); // stop the drag gesture from starting a text selection
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragStateRef.current = { draggedSongId: songId };
+    const originalIndex = songIds.indexOf(songId);
+    const el = rowRefs.current.get(songId);
+    if (el) {
+      const nextEl = rowRefs.current.get(songIds[originalIndex + 1]);
+      rowStepRef.current = nextEl
+        ? nextEl.getBoundingClientRect().top - el.getBoundingClientRect().top
+        : el.getBoundingClientRect().height + 6;
+    }
+    dragStateRef.current = { draggedSongId: songId, originalIndex, dropTargetIndex: originalIndex };
     setDraggedSongId(songId);
+    setDropTargetIndex(originalIndex);
   };
 
   const handleDragPointerMove = (e) => {
-    const draggingId = dragStateRef.current.draggedSongId;
+    const { draggedSongId: draggingId } = dragStateRef.current;
     if (draggingId == null) return;
-    let closestId = null;
+    let closestIndex = null;
     let closestDist = Infinity;
-    rowRefs.current.forEach((el, id) => {
+    orderedSongs.forEach((s, idx) => {
+      const el = rowRefs.current.get(s.id);
+      if (!el) return;
       const rect = el.getBoundingClientRect();
       const mid = rect.top + rect.height / 2;
       const dist = Math.abs(e.clientY - mid);
       if (dist < closestDist) {
         closestDist = dist;
-        closestId = id;
+        closestIndex = idx;
       }
     });
-    if (closestId !== null && closestId !== draggingId) {
-      const from = songIds.indexOf(draggingId);
-      const to = songIds.indexOf(closestId);
-      if (from !== -1 && to !== -1) {
-        captureRectsBeforeReorder();
-        moveSongTo(from, to);
-      }
+    if (closestIndex !== null && closestIndex !== dragStateRef.current.dropTargetIndex) {
+      dragStateRef.current.dropTargetIndex = closestIndex;
+      setDropTargetIndex(closestIndex);
     }
   };
 
   const handleDragPointerUp = () => {
-    dragStateRef.current = { draggedSongId: null };
+    const { draggedSongId: draggingId, originalIndex, dropTargetIndex: target } = dragStateRef.current;
+    if (draggingId != null && originalIndex !== target && target !== null) {
+      moveSongTo(originalIndex, target);
+    }
+    dragStateRef.current = { draggedSongId: null, originalIndex: null, dropTargetIndex: null };
     setDraggedSongId(null);
+    setDropTargetIndex(null);
+  };
+
+  // How far row i should visually shift right now, while a drag is active.
+  const dragRowShift = (i) => {
+    if (draggedSongId === null || dropTargetIndex === null) return 0;
+    const originalIndex = dragStateRef.current.originalIndex;
+    if (originalIndex === null) return 0;
+    if (i === originalIndex) return (dropTargetIndex - originalIndex) * rowStepRef.current;
+    if (originalIndex < dropTargetIndex && i > originalIndex && i <= dropTargetIndex) {
+      return -rowStepRef.current;
+    }
+    if (originalIndex > dropTargetIndex && i >= dropTargetIndex && i < originalIndex) {
+      return rowStepRef.current;
+    }
+    return 0;
   };
 
   const [useUniformFormat, setUseUniformFormat] = useState(!!initial?.format);
@@ -1404,6 +1392,12 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
               ref={(el) => {
                 if (el) rowRefs.current.set(s.id, el);
                 else rowRefs.current.delete(s.id);
+              }}
+              style={{
+                transform: `translateY(${dragRowShift(i)}px)`,
+                transition: draggedSongId === s.id ? "transform 0.12s ease" : "transform 0.18s ease",
+                position: "relative",
+                zIndex: draggedSongId === s.id ? 2 : 1,
               }}
             >
               <div
