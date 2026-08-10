@@ -1,109 +1,103 @@
-# Worship Song Slide Library — standalone app
+# Worship Song Slide Library
 
-This is the same app you've been using inside Claude, set up to run as a normal
-website. It builds and runs cleanly (verified with `npm run build` before this
-was handed to you).
+**Live app:** https://worship-presenter-app.vercel.app/
 
-## Run it locally
+A shared song library and slide generator for worship teams. Import chord
+sheets, get clean lyric-only slides, and export ready-to-use PowerPoint
+decks — no manual retyping, no chords accidentally left on screen.
+
+---
+
+## What it does
+
+- **Shared song library.** Every song is stored centrally (Supabase), so
+  anyone on the team who opens the app sees and can edit the same library —
+  not a private copy per person.
+- **Paste or import.** Add a song by pasting a chord sheet as text, or
+  uploading a PDF directly (from SongSelect or similar) — the app strips
+  chords and reconstructs clean lyrics automatically, including two-column
+  layouts and Nashville Number System charts.
+- **Bulk cloud import.** Point the app at a private Supabase Storage bucket
+  full of chord-sheet PDFs and import all of them in one pass, with
+  per-file progress and a summary of anything that failed to parse.
+- **Per-song slide formatting.** Font, font size, lines per slide, and
+  whether section labels (Verse/Chorus/etc.) are shown are all adjustable
+  per song, with a live projector-style preview.
+- **Export.** Copy slides as plain text (for ProPresenter, EasyWorship,
+  etc.) or download a real `.pptx` file, generated right in the browser —
+  no round-trip through any other tool.
+
+## Known limitations
+
+Worth knowing rather than being surprised by:
+
+- **PDF chord-stripping is heuristic, not perfect.** It handles standard
+  letter chords, Nashville numbers, altered/extended chords, and most
+  two-column layouts correctly, but always glance over an imported song
+  before trusting it, especially the first line or two of each section.
+- **Some PDFs drop letters on import.** A handful of embedded PDF fonts
+  encode ligatures (the "fi" in "fire," for example) as characters with no
+  real text mapping — those letters are genuinely unrecoverable from the
+  file itself, not a bug in the parser. If an imported song is missing a
+  letter or two in an unexpected spot, this is usually why.
+- **Chord sheets with more than two independent columns** (rare, but it
+  happens) can come out with sections in the wrong order. Two clean columns
+  read correctly; anything more complex is safer pasted in by hand.
+- **Artist/songwriter data is a work in progress.** The library was
+  originally imported with many songs missing correct artist credit or
+  carrying garbled values (leftover chord notation that got misread as the
+  artist field). Titles have all been normalized to Title Case, and a large
+  ongoing cleanup pass has been identifying correct artists from each
+  song's own lyrics (cross-checked against CCLI/publisher sources where
+  possible) rather than guessing. Songs where that couldn't be confirmed
+  are left with an empty artist field on purpose, rather than a wrong one —
+  worth a look before relying on this data for CCLI reporting.
+
+## Tech stack
+
+- **Frontend:** React + Vite
+- **Backend:** Supabase (Postgres for song data, Storage for source PDFs)
+- **Hosting:** Vercel
+- **PDF parsing:** pdf.js, loaded client-side
+- **Slide export:** pptxgenjs, generated client-side
+- **Fonts:** Google Fonts, loaded at runtime
+
+## Data model
+
+Two things live in Supabase:
+
+**`song_storage` table** — one row per song, plus a couple of setlist rows:
+
+```sql
+create table song_storage (
+  key text primary key,   -- e.g. "songs:above-all"
+  value text not null     -- JSON: title, artist, rawText, linesPerSlide,
+);                         --       fontFamily, fontSize, showLabels
+```
+
+**`chord-sheets` Storage bucket** — private bucket holding the raw PDF
+chord charts used for bulk cloud import. "Private" here means not publicly
+browsable, gated the same way the song table is (via the app's own
+credentials) rather than per-user authentication — anyone with access to
+the deployed app can read it.
+
+## Local development
 
 ```
 npm install
 npm run dev
 ```
 
-Then open the URL it prints (usually http://localhost:5173).
+Requires a `.env.local` with:
 
-**Storage note:** `src/storageShim.js` replaces Claude's `window.storage` with
-your browser's `localStorage`, so the app code (`src/App.jsx`) didn't need any
-changes. This means your song library lives in *that one browser, on that one
-computer* — it won't sync across devices and won't be shared with anyone else,
-even though the app's code still says `shared: true` internally. Good for
-trying it out or for genuinely single-person use.
+```
+VITE_SUPABASE_URL=your-project-url
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
 
-## Deploy it so your team can use it
+## Status snapshot
 
-Two separate problems to solve: hosting the app, and giving it a real shared
-backend (localStorage won't cut it once more than one person needs to see the
-same library).
-
-### 1. Host the app — easiest: Vercel or Netlify
-
-1. Push this folder to a GitHub repo.
-2. Go to vercel.com (or netlify.com) → New Project → import that repo.
-3. Framework preset: Vite. Build command `npm run build`, output dir `dist`.
-4. Deploy. You'll get a URL anyone can open.
-
-This alone gets you a real, shareable link — but everyone who opens it still
-gets their *own* localStorage, so they won't see each other's songs. For an
-actually shared library, you need step 2.
-
-### 2. Give it a real shared backend — easiest: Supabase
-
-Supabase gives you a free hosted Postgres database with an API in a few
-minutes, no server to manage.
-
-1. Create a project at supabase.com.
-2. In the SQL editor, create one table:
-   ```sql
-   create table song_storage (
-     key text primary key,
-     value text not null
-   );
-   alter table song_storage enable row level security;
-   create policy "public read/write" on song_storage
-     for all using (true) with check (true);
-   ```
-   (The open policy is fine for an internal tool behind a private link; lock
-   it down further if this ever needs real access control.)
-3. `npm install @supabase/supabase-js`
-4. Replace `src/storageShim.js` with a version that talks to Supabase instead
-   of localStorage — same four methods (`get`, `set`, `delete`, `list`), same
-   shape of return values, so `App.jsx` still doesn't need to change:
-
-   ```js
-   import { createClient } from "@supabase/supabase-js";
-
-   const supabase = createClient(
-     "https://YOUR-PROJECT.supabase.co",
-     "YOUR-PUBLIC-ANON-KEY"
-   );
-
-   window.storage = {
-     async get(key) {
-       const { data, error } = await supabase
-         .from("song_storage")
-         .select("value")
-         .eq("key", key)
-         .single();
-       if (error || !data) throw new Error("Key not found: " + key);
-       return { key, value: data.value, shared: true };
-     },
-     async set(key, value) {
-       await supabase.from("song_storage").upsert({ key, value });
-       return { key, value, shared: true };
-     },
-     async delete(key) {
-       await supabase.from("song_storage").delete().eq("key", key);
-       return { key, deleted: true, shared: true };
-     },
-     async list(prefix = "") {
-       const { data } = await supabase
-         .from("song_storage")
-         .select("key")
-         .like("key", `${prefix}%`);
-       return { keys: (data || []).map((r) => r.key), prefix, shared: true };
-     },
-   };
-   ```
-5. Redeploy. Now everyone who opens the Vercel/Netlify link sees the same
-   library, same as it worked inside Claude.
-
-## Other things worth knowing
-
-- **PDF import and PowerPoint export** already load their libraries (`pdf.js`,
-  `pptxgenjs`) from a CDN at runtime, exactly like they did inside Claude —
-  no extra setup needed for those to keep working.
-- **Fonts** are pulled from Google Fonts via the `<style>` tag already in
-  `App.jsx` — also needs no changes.
-- If you ever want to edit the app further, `src/App.jsx` is the whole thing —
-  same file you've been getting from Claude each time.
+As of this writing: 518 songs in the library. Titles are fully normalized.
+Artist attribution cleanup is ongoing — several hundred songs have been
+resolved so far, with the remainder tracked in a running list rather than
+left silently wrong.
