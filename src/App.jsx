@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import {
   Search,
   Plus,
@@ -1154,45 +1154,83 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
   const [expandedSongId, setExpandedSongId] = useState(null);
   const [editingSongId, setEditingSongId] = useState(null);
   const [savingSongId, setSavingSongId] = useState(null);
-  const [draggedIndex, setDraggedIndex] = useState(null);
-  const dragStateRef = useRef({ draggedIndex: null });
-  const rowRefs = useRef(new Map());
+  const [draggedSongId, setDraggedSongId] = useState(null);
+  const dragStateRef = useRef({ draggedSongId: null });
+  const rowRefs = useRef(new Map()); // songId -> row element
+  const prevRectsRef = useRef(null); // songId -> DOMRect, captured just before a reorder
+
+  const captureRectsBeforeReorder = () => {
+    const rects = new Map();
+    rowRefs.current.forEach((el, id) => rects.set(id, el.getBoundingClientRect()));
+    prevRectsRef.current = rects;
+  };
+
+  // FLIP animation: after songIds reorders (and React has already moved the
+  // DOM nodes), slide every OTHER row from its old position to its new one
+  // instead of letting it snap instantly. The row actually being dragged is
+  // skipped so it stays visually "held" while everything else moves around it.
+  useLayoutEffect(() => {
+    if (!prevRectsRef.current) return;
+    const prevRects = prevRectsRef.current;
+    prevRectsRef.current = null;
+    const draggingId = dragStateRef.current.draggedSongId;
+
+    rowRefs.current.forEach((el, id) => {
+      if (id === draggingId) return;
+      const prev = prevRects.get(id);
+      if (!prev) return;
+      const next = el.getBoundingClientRect();
+      const deltaY = prev.top - next.top;
+      if (Math.abs(deltaY) < 0.5) return;
+      el.style.transition = "none";
+      el.style.transform = `translateY(${deltaY}px)`;
+      el.getBoundingClientRect(); // force reflow so the transform above applies before we animate away from it
+      requestAnimationFrame(() => {
+        el.style.transition = "transform 0.22s cubic-bezier(0.2, 0, 0.2, 1)";
+        el.style.transform = "";
+      });
+    });
+  }, [songIds]);
 
   // Pointer Events (not native HTML5 drag-and-drop) so this works on touch
   // devices too, not just mouse. The handle captures the pointer on
   // pointerdown, so move/up events keep firing on it even as the finger/
   // cursor travels over other rows. Reorders live as you drag (not just on
   // drop) so the song actually moves in place, not just a static highlight.
-  const handleDragPointerDown = (e, index) => {
+  const handleDragPointerDown = (e, songId) => {
+    e.preventDefault(); // stop the drag gesture from starting a text selection
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragStateRef.current = { draggedIndex: index };
-    setDraggedIndex(index);
+    dragStateRef.current = { draggedSongId: songId };
+    setDraggedSongId(songId);
   };
 
   const handleDragPointerMove = (e) => {
-    const current = dragStateRef.current.draggedIndex;
-    if (current == null) return;
-    let closestIndex = null;
+    const draggingId = dragStateRef.current.draggedSongId;
+    if (draggingId == null) return;
+    let closestId = null;
     let closestDist = Infinity;
-    rowRefs.current.forEach((el, idx) => {
+    rowRefs.current.forEach((el, id) => {
       const rect = el.getBoundingClientRect();
       const mid = rect.top + rect.height / 2;
       const dist = Math.abs(e.clientY - mid);
       if (dist < closestDist) {
         closestDist = dist;
-        closestIndex = idx;
+        closestId = id;
       }
     });
-    if (closestIndex !== null && closestIndex !== current) {
-      moveSongTo(current, closestIndex);
-      dragStateRef.current.draggedIndex = closestIndex;
-      setDraggedIndex(closestIndex);
+    if (closestId !== null && closestId !== draggingId) {
+      const from = songIds.indexOf(draggingId);
+      const to = songIds.indexOf(closestId);
+      if (from !== -1 && to !== -1) {
+        captureRectsBeforeReorder();
+        moveSongTo(from, to);
+      }
     }
   };
 
   const handleDragPointerUp = () => {
-    dragStateRef.current = { draggedIndex: null };
-    setDraggedIndex(null);
+    dragStateRef.current = { draggedSongId: null };
+    setDraggedSongId(null);
   };
 
   const [useUniformFormat, setUseUniformFormat] = useState(!!initial?.format);
@@ -1354,20 +1392,20 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
             <div
               key={s.id}
               ref={(el) => {
-                if (el) rowRefs.current.set(i, el);
-                else rowRefs.current.delete(i);
+                if (el) rowRefs.current.set(s.id, el);
+                else rowRefs.current.delete(s.id);
               }}
             >
               <div
                 style={{
                   ...styles.setlistRow,
-                  ...(draggedIndex === i ? styles.setlistRowDragOver : {}),
+                  ...(draggedSongId === s.id ? styles.setlistRowDragOver : {}),
                 }}
               >
                 <span
                   style={{ ...styles.setlistDragHandle, touchAction: "none" }}
                   title="Drag to reorder"
-                  onPointerDown={(e) => handleDragPointerDown(e, i)}
+                  onPointerDown={(e) => handleDragPointerDown(e, s.id)}
                   onPointerMove={handleDragPointerMove}
                   onPointerUp={handleDragPointerUp}
                   onPointerCancel={handleDragPointerUp}
@@ -2497,11 +2535,14 @@ const styles = {
     background: "#fff",
     border: `1px solid ${TOKENS.rule}`,
     borderRadius: 8,
-    transition: "border-color 0.15s ease, background 0.15s ease",
+    transition: "border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease",
+    userSelect: "none",
+    WebkitUserSelect: "none",
   },
   setlistRowDragOver: {
     borderColor: TOKENS.accent,
     background: TOKENS.infoBg,
+    boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
   },
   setlistDragHandle: {
     display: "flex",
