@@ -852,7 +852,7 @@ function SongForm({ initial, onCancel, onSave, saving }) {
             </button>
           </div>
           <div style={styles.previewStrip}>
-            <TitleScreen title={title} artist={artist} fontFamily={fontFamily} allCaps={allCaps} small />
+            <TitleScreen title={title} fontFamily={fontFamily} allCaps={allCaps} small />
             {preview.slice(0, 6).map((s, i) => (
               <MiniScreen key={i} slide={s} fontFamily={fontFamily} fontSize={fontSize} allCaps={allCaps} />
             ))}
@@ -961,7 +961,7 @@ function MiniScreen({ slide, fontFamily, fontSize, allCaps }) {
   );
 }
 
-function TitleScreen({ title, artist, fontFamily, allCaps, small }) {
+function TitleScreen({ title, fontFamily, allCaps, small }) {
   const caseText = (t) => (allCaps ? t.toUpperCase() : t);
   return (
     <div style={{ ...styles.screen, ...(small ? styles.screenSmall : {}) }}>
@@ -977,20 +977,6 @@ function TitleScreen({ title, artist, fontFamily, allCaps, small }) {
       >
         {caseText(title || "Untitled")}
       </div>
-      {artist && (
-        <div
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: small ? 8.5 : 12,
-            color: TOKENS.screenText,
-            opacity: 0.6,
-            marginTop: small ? 4 : 8,
-            textAlign: "center",
-          }}
-        >
-          {caseText(artist)}
-        </div>
-      )}
     </div>
   );
 }
@@ -1125,7 +1111,7 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
       <div style={{ marginBottom: 12 }} />
 
       <div style={styles.screenGrid}>
-        <TitleScreen title={song.title} artist={song.artist} fontFamily={song.fontFamily} allCaps={song.allCaps} />
+        <TitleScreen title={song.title} fontFamily={song.fontFamily} allCaps={song.allCaps} />
         {slides.map((s, i) => (
           <div key={i} style={styles.screen}>
             <div
@@ -1169,23 +1155,23 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
   const [editingSongId, setEditingSongId] = useState(null);
   const [savingSongId, setSavingSongId] = useState(null);
   const [draggedIndex, setDraggedIndex] = useState(null);
-  const [dragOverIndex, setDragOverIndex] = useState(null);
-  const dragStateRef = useRef({ draggedIndex: null, dragOverIndex: null });
+  const dragStateRef = useRef({ draggedIndex: null });
   const rowRefs = useRef(new Map());
 
   // Pointer Events (not native HTML5 drag-and-drop) so this works on touch
   // devices too, not just mouse. The handle captures the pointer on
   // pointerdown, so move/up events keep firing on it even as the finger/
-  // cursor travels over other rows.
+  // cursor travels over other rows. Reorders live as you drag (not just on
+  // drop) so the song actually moves in place, not just a static highlight.
   const handleDragPointerDown = (e, index) => {
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragStateRef.current = { draggedIndex: index, dragOverIndex: index };
+    dragStateRef.current = { draggedIndex: index };
     setDraggedIndex(index);
-    setDragOverIndex(index);
   };
 
   const handleDragPointerMove = (e) => {
-    if (dragStateRef.current.draggedIndex === null) return;
+    const current = dragStateRef.current.draggedIndex;
+    if (current == null) return;
     let closestIndex = null;
     let closestDist = Infinity;
     rowRefs.current.forEach((el, idx) => {
@@ -1197,18 +1183,16 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
         closestIndex = idx;
       }
     });
-    if (closestIndex !== null && closestIndex !== dragStateRef.current.dragOverIndex) {
-      dragStateRef.current.dragOverIndex = closestIndex;
-      setDragOverIndex(closestIndex);
+    if (closestIndex !== null && closestIndex !== current) {
+      moveSongTo(current, closestIndex);
+      dragStateRef.current.draggedIndex = closestIndex;
+      setDraggedIndex(closestIndex);
     }
   };
 
   const handleDragPointerUp = () => {
-    const { draggedIndex: from, dragOverIndex: to } = dragStateRef.current;
-    if (from !== null && to !== null && from !== to) moveSongTo(from, to);
-    dragStateRef.current = { draggedIndex: null, dragOverIndex: null };
+    dragStateRef.current = { draggedIndex: null };
     setDraggedIndex(null);
-    setDragOverIndex(null);
   };
 
   const [useUniformFormat, setUseUniformFormat] = useState(!!initial?.format);
@@ -1373,12 +1357,11 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
                 if (el) rowRefs.current.set(i, el);
                 else rowRefs.current.delete(i);
               }}
-              style={{ opacity: draggedIndex === i ? 0.4 : 1 }}
             >
               <div
                 style={{
                   ...styles.setlistRow,
-                  ...(dragOverIndex === i && draggedIndex !== i ? styles.setlistRowDragOver : {}),
+                  ...(draggedIndex === i ? styles.setlistRowDragOver : {}),
                 }}
               >
                 <span
