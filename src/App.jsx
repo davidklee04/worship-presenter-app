@@ -1170,6 +1170,46 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
   const [savingSongId, setSavingSongId] = useState(null);
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
+  const dragStateRef = useRef({ draggedIndex: null, dragOverIndex: null });
+  const rowRefs = useRef(new Map());
+
+  // Pointer Events (not native HTML5 drag-and-drop) so this works on touch
+  // devices too, not just mouse. The handle captures the pointer on
+  // pointerdown, so move/up events keep firing on it even as the finger/
+  // cursor travels over other rows.
+  const handleDragPointerDown = (e, index) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStateRef.current = { draggedIndex: index, dragOverIndex: index };
+    setDraggedIndex(index);
+    setDragOverIndex(index);
+  };
+
+  const handleDragPointerMove = (e) => {
+    if (dragStateRef.current.draggedIndex === null) return;
+    let closestIndex = null;
+    let closestDist = Infinity;
+    rowRefs.current.forEach((el, idx) => {
+      const rect = el.getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      const dist = Math.abs(e.clientY - mid);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIndex = idx;
+      }
+    });
+    if (closestIndex !== null && closestIndex !== dragStateRef.current.dragOverIndex) {
+      dragStateRef.current.dragOverIndex = closestIndex;
+      setDragOverIndex(closestIndex);
+    }
+  };
+
+  const handleDragPointerUp = () => {
+    const { draggedIndex: from, dragOverIndex: to } = dragStateRef.current;
+    if (from !== null && to !== null && from !== to) moveSongTo(from, to);
+    dragStateRef.current = { draggedIndex: null, dragOverIndex: null };
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
 
   const [useUniformFormat, setUseUniformFormat] = useState(!!initial?.format);
   const [formatFontFamily, setFormatFontFamily] = useState(initial?.format?.fontFamily || DEFAULT_FONT_FAMILY);
@@ -1329,25 +1369,9 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
           {orderedSongs.map((s, i) => (
             <div
               key={s.id}
-              draggable
-              onDragStart={(e) => {
-                setDraggedIndex(i);
-                e.dataTransfer.effectAllowed = "move";
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                if (draggedIndex === null || draggedIndex === i) return;
-                setDragOverIndex(i);
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (draggedIndex !== null && draggedIndex !== i) moveSongTo(draggedIndex, i);
-                setDraggedIndex(null);
-                setDragOverIndex(null);
-              }}
-              onDragEnd={() => {
-                setDraggedIndex(null);
-                setDragOverIndex(null);
+              ref={(el) => {
+                if (el) rowRefs.current.set(i, el);
+                else rowRefs.current.delete(i);
               }}
               style={{ opacity: draggedIndex === i ? 0.4 : 1 }}
             >
@@ -1357,7 +1381,14 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
                   ...(dragOverIndex === i && draggedIndex !== i ? styles.setlistRowDragOver : {}),
                 }}
               >
-                <span style={styles.setlistDragHandle} title="Drag to reorder">
+                <span
+                  style={{ ...styles.setlistDragHandle, touchAction: "none" }}
+                  title="Drag to reorder"
+                  onPointerDown={(e) => handleDragPointerDown(e, i)}
+                  onPointerMove={handleDragPointerMove}
+                  onPointerUp={handleDragPointerUp}
+                  onPointerCancel={handleDragPointerUp}
+                >
                   <GripVertical size={14} />
                 </span>
                 <span style={styles.setlistRowIndex}>{i + 1}</span>
