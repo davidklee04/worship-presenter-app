@@ -1160,6 +1160,16 @@ function SetlistBuilder({ initial, allSongs, onCancel, onSave, onDelete, onUpdat
   const prevRectsRef = useRef(null); // songId -> DOMRect, captured just before a reorder
 
   const captureRectsBeforeReorder = () => {
+    // Clear any FLIP transform still animating from a previous reorder
+    // first, so rects reflect true layout position rather than a
+    // mid-transition visual offset. Without this, a fast drag that
+    // triggers several reorders before the 0.22s animation finishes reads
+    // stale positions and only ever advances one row at a time instead of
+    // jumping straight to wherever the pointer actually is.
+    rowRefs.current.forEach((el) => {
+      el.style.transition = "none";
+      el.style.transform = "";
+    });
     const rects = new Map();
     rowRefs.current.forEach((el, id) => rects.set(id, el.getBoundingClientRect()));
     prevRectsRef.current = rects;
