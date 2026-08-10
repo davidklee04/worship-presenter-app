@@ -986,6 +986,13 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
   const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(null);
+  const [showPdfPreview, setShowPdfPreview] = useState(false);
+
+  // Switching to a different song shouldn't leave the previous one's PDF
+  // open (or the toggle stuck "on" pointing at nothing).
+  useEffect(() => {
+    setShowPdfPreview(false);
+  }, [song.id]);
 
   const handleCopy = async () => {
     try {
@@ -1088,14 +1095,9 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
         </span>
         <div style={{ flex: 1 }} />
         {song.pdfPath && (
-          <a
-            href={pdfPublicUrl(song.pdfPath)}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ ...styles.ghostBtnSmall, textDecoration: "none" }}
-          >
-            <FileText size={13} /> View original PDF
-          </a>
+          <button onClick={() => setShowPdfPreview((v) => !v)} style={styles.ghostBtnSmall}>
+            <FileText size={13} /> {showPdfPreview ? "Hide original PDF" : "View original PDF"}
+          </button>
         )}
         <button onClick={handleCopy} style={styles.ghostBtnSmall}>
           <Copy size={13} /> {copied ? "Copied!" : "Copy as text"}
@@ -1108,6 +1110,24 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
       {downloadError && (
         <div style={{ ...styles.errorBanner, marginTop: 0, marginBottom: 16 }}>{downloadError}</div>
       )}
+
+      {showPdfPreview && song.pdfPath && (
+        <div style={styles.pdfPreviewWrap}>
+          <div style={styles.pdfPreviewToolbar}>
+            <span style={{ fontFamily: "Inter", fontSize: 11.5, color: TOKENS.inkSoft }}>Original PDF</span>
+            <a
+              href={pdfPublicUrl(song.pdfPath)}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontFamily: "Inter", fontSize: 11.5, color: TOKENS.accent }}
+            >
+              Open in new tab ↗
+            </a>
+          </div>
+          <iframe src={pdfPublicUrl(song.pdfPath)} title={`${song.title} — original PDF`} style={styles.pdfIframe} />
+        </div>
+      )}
+
       <div style={{ marginBottom: 12 }} />
 
       <div style={styles.screenGrid}>
@@ -2834,6 +2854,27 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
     gap: 14,
+  },
+  pdfPreviewWrap: {
+    border: `1px solid ${TOKENS.rule}`,
+    borderRadius: 10,
+    overflow: "hidden",
+    marginBottom: 16,
+    background: "#fff",
+  },
+  pdfPreviewToolbar: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "6px 12px",
+    background: TOKENS.paperDeep,
+    borderBottom: `1px solid ${TOKENS.rule}`,
+  },
+  pdfIframe: {
+    width: "100%",
+    height: 600,
+    border: "none",
+    display: "block",
   },
   previewStrip: {
     display: "flex",
