@@ -852,6 +852,7 @@ function SongForm({ initial, onCancel, onSave, saving }) {
             </button>
           </div>
           <div style={styles.previewStrip}>
+            <TitleScreen title={title} artist={artist} fontFamily={fontFamily} allCaps={allCaps} small />
             {preview.slice(0, 6).map((s, i) => (
               <MiniScreen key={i} slide={s} fontFamily={fontFamily} fontSize={fontSize} allCaps={allCaps} />
             ))}
@@ -956,6 +957,40 @@ function MiniScreen({ slide, fontFamily, fontSize, allCaps }) {
           <div key={i}>{l}</div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function TitleScreen({ title, artist, fontFamily, allCaps, small }) {
+  const caseText = (t) => (allCaps ? t.toUpperCase() : t);
+  return (
+    <div style={{ ...styles.screen, ...(small ? styles.screenSmall : {}) }}>
+      <div
+        style={{
+          fontFamily: fontFamily || DEFAULT_FONT_FAMILY,
+          fontWeight: 700,
+          fontSize: small ? 15 : 26,
+          color: TOKENS.screenText,
+          textAlign: "center",
+          lineHeight: 1.25,
+        }}
+      >
+        {caseText(title || "Untitled")}
+      </div>
+      {artist && (
+        <div
+          style={{
+            fontFamily: "'Inter', sans-serif",
+            fontSize: small ? 8.5 : 12,
+            color: TOKENS.screenText,
+            opacity: 0.6,
+            marginTop: small ? 4 : 8,
+            textAlign: "center",
+          }}
+        >
+          {caseText(artist)}
+        </div>
+      )}
     </div>
   );
 }
@@ -1090,6 +1125,7 @@ function SongPreview({ song, onEdit, onDelete, onUpdateSettings, confirmingDelet
       <div style={{ marginBottom: 12 }} />
 
       <div style={styles.screenGrid}>
+        <TitleScreen title={song.title} artist={song.artist} fontFamily={song.fontFamily} allCaps={song.allCaps} />
         {slides.map((s, i) => (
           <div key={i} style={styles.screen}>
             <div
@@ -1925,6 +1961,7 @@ export default function WorshipSlideLibrary() {
         @media (max-width: 720px) {
           .wsl-shell { grid-template-columns: 1fr !important; }
           .wsl-sidebar { border-right: none !important; border-bottom: 1px solid ${TOKENS.rule}; }
+          .wsl-songlist { max-height: 200px !important; }
         }
       `}</style>
 
@@ -2028,7 +2065,7 @@ export default function WorshipSlideLibrary() {
                 </button>
               </div>
 
-              <div style={styles.songList}>
+              <div className="wsl-songlist" style={styles.songList}>
                 {loading && (
                   <div style={{ padding: 20, display: "flex", justifyContent: "center" }}>
                     <Loader2 size={18} className="spin" color={TOKENS.inkSoft} />
@@ -2065,7 +2102,7 @@ export default function WorshipSlideLibrary() {
           )}
 
           {view === "setlists" && (
-            <div style={styles.songList}>
+            <div className="wsl-songlist" style={styles.songList}>
               {setlistsLoading && (
                 <div style={{ padding: 20, display: "flex", justifyContent: "center" }}>
                   <Loader2 size={18} className="spin" color={TOKENS.inkSoft} />
